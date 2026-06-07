@@ -66,8 +66,16 @@ Auth for both modes via the App Manifest flow ([ADR rationale in CONTEXT](./CONT
 
 ## Deploy modes
 
-- **Self-host:** `docker run` the Hub, run the Manifest flow, point the Watcher at your Hub URL.
+- **Self-host:** `docker compose up` the Hub **+ bundled OpenObserve** (default OTLP sink), run the Manifest flow, point the Watcher at your Hub URL.
 - **SaaS:** install the hosted App, install the Watcher, subscribe. (Pricing TBD.)
+
+## Observability
+
+The Hub is instrumented with the **OpenTelemetry Go SDK** and emits traces/logs/metrics over **OTLP** to a configurable endpoint — it stores no telemetry itself and stays vendor-neutral ([ADR-0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)).
+
+- **Default sink: [OpenObserve](https://openobserve.ai)** — one binary, single-node SQLite + local disk (no Prometheus/ClickHouse/Elastic/Grafana, no Postgres/NATS), native OTLP for all three signals, built-in trace/log/metric UI. So self-hosters *see their own OTel stack* with zero extra setup.
+- **Bring your own:** point `OTEL_EXPORTER_OTLP_ENDPOINT` at any OTLP backend (your OpenObserve, Grafana/Tempo, Datadog…), or unset it to disable export.
+- Telemetry never lands in the Hub's SQLite/Postgres; OpenObserve owns its own storage (local disk, or S3/GCS at scale).
 
 ## Build slices (suggested order)
 
