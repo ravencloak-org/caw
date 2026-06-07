@@ -1,0 +1,67 @@
+# Caw — Session Handoff
+
+**Date:** 2026-06-07
+**Scope:** Design convergence for **caw**, a new standalone product. Pre-implementation — no code yet.
+**Working dir:** `~/Project/caw`
+
+> This doc is the bridge for a fresh agent. It does **not** repeat the design — that lives in the artifacts below. Read those first; this only adds the *journey*, the *repo state*, and *what to do next*.
+
+## Read these first (don't duplicate)
+
+- [`README.md`](./README.md) — product pitch + build spec: flow, 3 signal-types, Hub endpoints, Watcher MCP tools, GitHub App events, **7 build slices**, open questions.
+- [`CONTEXT.md`](./CONTEXT.md) — canonical glossary (Session / Hub / Watcher / Subscription / Round / Signal-type / Pending item) + **Flagged ambiguities** (the term collisions we resolved).
+- [`docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md`](./docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md) — why not Cloudflare.
+- [`docs/adr/0002-agent-owned-rebase.md`](./docs/adr/0002-agent-owned-rebase.md) — why the agent rebases, not the Hub.
+
+## What caw is (one paragraph)
+
+When an AI agent raises a PR, caw pushes the PR's feedback (failing checks, review comments, mergeability) back to that same agent over a held-open SSE connection, so it fixes its own PR without a human re-prompting it. If the agent is gone, the feedback waits as a *Pending item* for the next agent's one-shot startup check. Harness-agnostic (any MCP client) and reviewer-agnostic (any bot/human commenter).
+
+## Repo state (as of this handoff)
+
+- `git init` done; **4 files staged, no commit yet**, no remote.
+- **Entire** enabled (`entire enable --agent claude-code`): 7 hooks installed, orphan branch `entire/checkpoints/v1`, config at `.entire/settings.json`.
+- **MemPalace** initialized: `mempalace.yaml` written (git-ignored); **not yet mined** — run `mempalace mine ~/Project/caw` when there's code worth indexing.
+- Files present: `README.md`, `CONTEXT.md`, `HANDOFF.md`, `docs/adr/0001…`, `docs/adr/0002…`.
+
+## Decision trail not captured in ADRs
+
+These were decided but are easy-to-reverse, so they live in `README.md`/`CONTEXT.md`, not ADRs. Recorded here so the next agent knows they were *deliberate*, not defaults:
+
+- **Channels dropped from v1.** Claude Code Channels (research-preview, needs `--dangerously-load-development-channels`, custom channels not allowlisted) is deferred to an optional add-on once it reaches general release. The portable contract is **MCP**, not Channels — that's why the Watcher is an MCP server, not a Claude plugin.
+- **Delivery = SSE push to a listening agent.** The *only* poll in the system is the mergeability re-verify after a Round settles. The startup pending-check is a single one-shot request, not polling.
+- **Timing = `check_suite completed` + ~30s grace, SHA-keyed Rounds** — explicitly *not* "wait for all three webhooks" (Squawk only fires on migration PRs; CodeRabbit is async — a barrier would hang).
+- **3 dynamic signal-types** (Checks / Comments / Mergeability), sources attributed at runtime — *not* hardcoded brand categories.
+- **GitHub App everywhere via Manifest flow** — never store customer PATs; local agent keeps its own `gh`.
+- **Autonomy:** a listening originator continues its already-approved task without a prompt; an orphaned PR's work prompts the human via the next session.
+- **Severity = label + symbol + colour** (not colour alone) — the user's terminal theme is `dark-daltonized`, so red/yellow alone is the wrong encoding.
+
+## Open questions (resolve before/at build)
+
+1. **SSE auth** — how the Watcher proves it owns `owner/repo#number` so a stranger can't subscribe to your PR stream. Tie to the App installation or a per-Session token. *Nail this before build slice 2.*
+2. Exact GitHub App permission scopes.
+3. CodeRabbit comment-format → severity parsing (first first-class source); next source after.
+4. Grace-window duration (start ~30s, tune).
+5. Channels re-add path once it GAs.
+
+## Next actions
+
+1. **Commit** the scaffold: `git commit` (the repo follows no house style yet — caw is standalone, *not* under Raven's rules).
+2. **Create a GitHub repo** + push (needed before issue tracking).
+3. **`/to-issues`** — turn the README's 7 build slices into tracer-bullet issues.
+4. **Build slice 1** — Hub core: webhook ingest + `X-Hub-Signature-256` verify + Round bucketing + SQLite pending store. (Go module not yet scaffolded — no `go.mod` yet.)
+
+## Suggested skills for the next session
+
+- **`brainstorming`** — only if revisiting product scope; the design is converged, so likely skip.
+- **`go-mcp-server-generator`** — to scaffold the Watcher MCP server (Go).
+- **`golang-pro`** / `cc-skills-golang:*` — for the Hub (Go + SQLite + SSE) and idiomatic patterns.
+- **`postgres`** — only if/when the SaaS Hub moves from SQLite to Postgres at scale.
+- **`to-issues`** — to break the 7 build slices into issues (after the GitHub repo exists).
+- **`tdd`** — for the Hub's webhook→compile→settle logic, which is test-friendly and correctness-critical.
+- **`dependabot`** — once `go.mod` exists, for supply-chain hygiene.
+
+## Notes / caveats
+
+- caw is a **separate product from Raven** — do not apply Raven's CLAUDE.md rules (DCO sign-off, squash-only, no-AI-attribution) unless the user re-states them for caw.
+- No secrets in this repo. The GitHub App credentials (when created) must never be committed.
