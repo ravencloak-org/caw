@@ -1,0 +1,187 @@
+Base directory for this skill: /Users/jobinlawrance/.claude/skills/grill-with-docs
+
+<what-to-do>
+
+Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+
+Ask the questions one at a time, waiting for feedback on each question before continuing.
+
+If a question can be answered by exploring the codebase, explore the codebase instead.
+
+</what-to-do>
+
+<supporting-info>
+
+## Domain awareness
+
+During codebase exploration, also look for existing documentation:
+
+### File structure
+
+Most repos have a single context:
+
+```
+/
+├── CONTEXT.md
+├── docs/
+│   └── adr/
+│       ├── 0001-event-sourced-orders.md
+│       └── 0002-postgres-for-write-model.md
+└── src/
+```
+
+If a `CONTEXT-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
+
+```
+/
+├── CONTEXT-MAP.md
+├── docs/
+│   └── adr/                          ← system-wide decisions
+├── src/
+│   ├── ordering/
+│   │   ├── CONTEXT.md
+│   │   └── docs/adr/                 ← context-specific decisions
+│   └── billing/
+│       ├── CONTEXT.md
+│       └── docs/adr/
+```
+
+Create files lazily — only when you have something to write. If no `CONTEXT.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
+
+## During the session
+
+### Challenge against the glossary
+
+When the user uses a term that conflicts with the existing language in `CONTEXT.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y — which is it?"
+
+### Sharpen fuzzy language
+
+When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account' — do you mean the Customer or the User? Those are different things."
+
+### Discuss concrete scenarios
+
+When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
+
+### Cross-reference with code
+
+When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
+
+### Update CONTEXT.md inline
+
+When a term is resolved, update `CONTEXT.md` right there. Don't batch these up — capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
+
+Don't couple `CONTEXT.md` to implementation details. Only include terms that are meaningful to domain experts.
+
+### Offer ADRs sparingly
+
+Only offer to create an ADR when all three are true:
+
+1. **Hard to reverse** — the cost of changing your mind later is meaningful
+2. **Surprising without context** — a future reader will wonder "why did they do it this way?"
+3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
+
+If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
+
+</supporting-info>
+
+---
+
+A, why is it risky? i'm sure every cluade agent session has a unique id, use that for originator is easily identifier, also if sse connection drops or closed then add it to pending for that repo, next time any agent in that repo location opens a new agent, it will check for all the pending unresolved PR
+
+---
+
+offcourse when the session is raising the PR, it will itself start the SSE which can inform our hub that a session with id ex 123 wants to associate with a PR it raised ex #453, now when hub receives events for #453 it reverse checks with session id 123 which sse associated
+
+---
+
+well in the sql row, we can have a column like auto gen uuid v7, session id, pr number, repo name, org id, github username etc. and use session-id and pr number as a combined unique key, so that if anyone else tries to claim it, it will fail via constraint
+
+---
+
+even though it's unlikely but if multiple session wants to listen, let them, how does it matter?
+
+---
+
+let it fanout
+
+---
+
+that's fine, if a user is fool enought to use two agent to work on single PR, then they both should receive the updates together
+
+---
+
+recommendation
+
+---
+
+c
+
+---
+
+recommendation
+
+---
+
+nothing clears, when the new agent opens a session and check for pending events, we need to just give all of them. then it upto the user to pick which ones, in parallel or not etc. not my concern. also we need to be mindful of timestamp, if a new session of updates in pending comes, it should replace the existing event pending. only latest updates of events from gh for each type
+
+---
+
+yes recommended
+
+---
+
+yes commit and proceed.
+
+---
+
+done
+
+---
+
+why go? I was thinking of opentui
+
+---
+
+lets go with go but also use gin framework
+
+---
+
+<task-notification>
+<task-id>a1a986b113bb178b4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Agent "Populate GitHub wiki" completed</summary>
+<result>Pushed successfully.
+
+Updated 3 pages: Decisions.md (ADR-0001 now records Go + Gin, with the Kotlin/Spring Boot and TypeScript/Bun rejections and the OpenTUI note), Architecture.md (Hub heading → "Go + Gin + SQLite"), and Glossary.md (Hub definition → "Go + Gin + SQLite"). Home.md had no backend-stack mention, so no change there. Pull --rebase was clean; `git push origin master` succeeded (34c4da1..903fbf9).</result>
+<usage><subagent_tokens>58363</subagent_tokens><tool_uses>12</tool_uses><duration_ms>63413</duration_ms></usage>
+</task-notification>
+
+---
+
+also for tracing, can we do it in postgres itself because I want the users to see their own otel stack, traces and logs. especially if they want to self host without overhead of prometheus or clickhouse or elastic backend.
+
+---
+
+<task-notification>
+<task-id>a1a986b113bb178b4</task-id>
+<tool-use-id>toolu_01PqKbbSf6bsifpbgq3fdiUv</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Agent "Populate GitHub wiki" completed</summary>
+<result>Done. Changed Decisions.md (added ADR-0008 entry) and Architecture.md (added Observability note). Pull --rebase was clean; push succeeded (903fbf9..9c78c71).</result>
+<usage><subagent_tokens>62543</subagent_tokens><tool_uses>6</tool_uses><duration_ms>33581</duration_ms></usage>
+</task-notification>
+
+---
+
+yes start in parallel
+
+---
+
+add test cases for everything with codecov
+
+---
+
+Add actions to run these in parallel.
