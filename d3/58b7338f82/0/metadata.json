@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "d358b7338f82",
+  "session_id": "ed110f40-811f-4948-82a9-896e3ea3ca15",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-07T19:23:02.15371Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".gitignore",
+    "README.md",
+    "codecov.yml",
+    "internal/config/config_test.go",
+    "internal/github/events_test.go",
+    "internal/hub/handler_test.go",
+    "internal/hub/webhook_test.go",
+    "internal/store/store.go",
+    "internal/store/store_test.go"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "0e881e28-747d-4349-874f-d94bed1726bf",
+  "checkpoint_transcript_start": 581,
+  "transcript_lines_at_start": 581,
+  "token_usage": {
+    "input_tokens": 372,
+    "cache_creation_tokens": 24544,
+    "cache_read_tokens": 1908273,
+    "output_tokens": 22444,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-07T19:23:02.053216Z",
+    "agent_lines": 523,
+    "human_added": 23,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 546,
+    "agent_percentage": 95.7875457875458
+  }
+}
