@@ -1,0 +1,10 @@
+# SQLFluff config. Root dialect is sqlite (the Hub's embedded store, ADR-0001).
+# When Postgres migrations land, add migrations/postgres/.sqlfluff with
+# `dialect = postgres` — the nearest config to a file wins.
+[sqlfluff]
+dialect = sqlite
+max_line_length = 120
+
+# Column definitions in our DDL are intentionally aligned for readability;
+# layout.spacing (LT01) fights that and is style, not correctness.
+exclude_rules = layout.spacing

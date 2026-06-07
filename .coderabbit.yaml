@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_usernames:
+      - "dependabot[bot]"
+  path_filters:
+    - "!**/go.sum"
+    - "!**/*.pen"
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        Idiomatic Go: wrap errors with %w, table-driven tests, no silent error
+        suppression, no unbounded goroutines or un-stopped timers.
+        Respect the documented architecture in docs/adr/:
+          - SSE subscriptions fan out; route by PR key (ADR-0007).
+          - One summary per settle; same-SHA late signals re-settle (ADR-0004).
+          - Pending is latest-state per signal-type; nothing else clears it (ADR-0006).
+          - Rebase is single-owner via a Hub-granted lease (ADR-0002, ADR-0005).
+          - SSE auth is the Hub-minted installation token (ADR-0003).
+        The Hub must stay cgo-free (modernc.org/sqlite) so it builds a static binary (ADR-0001).
+    - path: "**/*_test.go"
+      instructions: |
+        Prefer table-driven subtests. Avoid flaky time-based assertions; rely on
+        the fact that timers never fire before their deadline rather than tight sleeps.
+    - path: "**/*.sql"
+      instructions: |
+        Flag migration-unsafe patterns (adding NOT NULL without a default, blocking
+        locks, destructive changes). Keep DDL portable between SQLite and Postgres
+        where practical (ADR-0001).
+  tools:
+    golangci-lint:
+      enabled: true
+      config_file: ".golangci.yml"
+chat:
+  auto_reply: true
