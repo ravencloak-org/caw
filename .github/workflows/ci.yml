@@ -52,7 +52,7 @@ jobs:
           go-version: "1.25"
           cache: true
       - name: Test with coverage
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:

@@ -133,3 +133,109 @@ func (s *Store) ListPending() ([]PendingItem, error) {
 	}
 	return items, rows.Err()
 }
+
+// Signal is one observed feedback item for a Round, awaiting compilation.
+type Signal struct {
+	Owner      string
+	Repo       string
+	Number     int
+	SHA        string
+	SignalType string
+	Source     string
+	ExternalID string
+	Severity   string
+	Body       string
+	UpdatedAt  int64
+}
+
+// AddSignal records a signal for a Round, replacing any prior signal with the
+// same natural key (owner/repo/number/sha + signal_type + source + external_id).
+func (s *Store) AddSignal(sig Signal) error {
+	_, err := s.db.Exec(
+		`INSERT INTO signals
+		     (owner, repo, number, sha, signal_type, source, external_id, severity, body, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(owner, repo, number, sha, signal_type, source, external_id) DO UPDATE SET
+		     severity = excluded.severity, body = excluded.body, updated_at = excluded.updated_at`,
+		sig.Owner, sig.Repo, sig.Number, sig.SHA, sig.SignalType,
+		sig.Source, sig.ExternalID, sig.Severity, sig.Body, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("add signal: %w", err)
+	}
+	return nil
+}
+
+// SignalsForRound returns every signal stored for a PR head SHA, in a stable order.
+func (s *Store) SignalsForRound(owner, repo string, number int, sha string) ([]Signal, error) {
+	rows, err := s.db.Query(
+		`SELECT owner, repo, number, sha, signal_type, source, external_id, severity, body, updated_at
+		 FROM signals WHERE owner = ? AND repo = ? AND number = ? AND sha = ?
+		 ORDER BY signal_type, source, external_id`,
+		owner, repo, number, sha,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("signals for round: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Signal
+	for rows.Next() {
+		var sig Signal
+		if err := rows.Scan(
+			&sig.Owner, &sig.Repo, &sig.Number, &sig.SHA, &sig.SignalType,
+			&sig.Source, &sig.ExternalID, &sig.Severity, &sig.Body, &sig.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan signal: %w", err)
+		}
+		out = append(out, sig)
+	}
+	return out, rows.Err()
+}
+
+// LatestRoundSHA returns the most-recently-seen head SHA for a PR, used to
+// attach signals (e.g. issue comments) that don't carry a SHA themselves.
+func (s *Store) LatestRoundSHA(owner, repo string, number int) (sha string, ok bool, err error) {
+	err = s.db.QueryRow(
+		`SELECT sha FROM rounds WHERE owner = ? AND repo = ? AND number = ?
+		 ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+		owner, repo, number,
+	).Scan(&sha)
+	switch {
+	case err == sql.ErrNoRows:
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("latest round sha: %w", err)
+	default:
+		return sha, true, nil
+	}
+}
+
+// InsertToken stores a hashed installation token (ADR-0003).
+func (s *Store) InsertToken(tokenHash, installationID, org string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO tokens (token_hash, installation_id, org, created_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(token_hash) DO UPDATE SET installation_id = excluded.installation_id, org = excluded.org`,
+		tokenHash, installationID, org, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert token: %w", err)
+	}
+	return nil
+}
+
+// VerifyToken resolves a token hash to its installation id. ok is false when the
+// token is unknown. It satisfies the auth.Verifier interface.
+func (s *Store) VerifyToken(tokenHash string) (installationID string, ok bool, err error) {
+	err = s.db.QueryRow(
+		`SELECT installation_id FROM tokens WHERE token_hash = ?`, tokenHash,
+	).Scan(&installationID)
+	switch {
+	case err == sql.ErrNoRows:
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("verify token: %w", err)
+	default:
+		return installationID, true, nil
+	}
+}
