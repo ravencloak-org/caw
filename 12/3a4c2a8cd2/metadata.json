@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "123a4c2a8cd2",
+  "strategy": "manual-commit",
+  "branch": "slice-2-compile-sse",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/compile/compile.go",
+    "internal/sse/handler.go",
+    "internal/sse/hub_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/12/3a4c2a8cd2/0/metadata.json",
+      "transcript": "/12/3a4c2a8cd2/0/full.jsonl",
+      "context": "/12/3a4c2a8cd2/0/context.md",
+      "content_hash": "/12/3a4c2a8cd2/0/content_hash.txt",
+      "prompt": "/12/3a4c2a8cd2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26895,
+    "cache_creation_tokens": 111771,
+    "cache_read_tokens": 213119,
+    "output_tokens": 5354,
+    "api_call_count": 6
+  }
+}
