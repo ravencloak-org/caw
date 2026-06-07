@@ -134,3 +134,61 @@ func TestPRKey(t *testing.T) {
 		t.Fatalf("PRKey = %q", got)
 	}
 }
+
+type fakePoller struct {
+	sig store.Signal
+	ok  bool
+	err error
+}
+
+func (f fakePoller) Mergeability(owner, repo string, number int, sha string) (store.Signal, bool, error) {
+	f.sig.Owner, f.sig.Repo, f.sig.Number, f.sig.SHA = owner, repo, number, sha
+	return f.sig, f.ok, f.err
+}
+
+func TestSettleWithPollerAddsMergeabilitySignal(t *testing.T) {
+	st := newStore(t)
+	pub := &fakePub{count: 1}
+	fp := fakePoller{
+		sig: store.Signal{SignalType: "mergeability", Source: "poll", ExternalID: "mergeability", Body: "behind base"},
+		ok:  true,
+	}
+	e := New(st, pub, time.Millisecond, WithPoller(fp))
+
+	e.FireNow("o", "r", 1, "sha")
+
+	sigs, err := st.SignalsForRound("o", "r", 1, "sha")
+	if err != nil {
+		t.Fatalf("SignalsForRound: %v", err)
+	}
+	found := false
+	for _, s := range sigs {
+		if s.SignalType == "mergeability" && s.Body == "behind base" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("mergeability signal not added by poller; got %+v", sigs)
+	}
+}
+
+func TestSettlePollerErrorIsNonFatal(t *testing.T) {
+	st := newStore(t)
+	pub := &fakePub{count: 1}
+	e := New(st, pub, time.Millisecond, WithPoller(fakePoller{err: errTest}))
+
+	e.FireNow("o", "r", 1, "sha") // must not panic; just logs
+
+	sigs, _ := st.SignalsForRound("o", "r", 1, "sha")
+	for _, s := range sigs {
+		if s.SignalType == "mergeability" {
+			t.Fatal("no mergeability signal should be stored on poll error")
+		}
+	}
+}
+
+var errTest = errTestType("poll failed")
+
+type errTestType string
+
+func (e errTestType) Error() string { return string(e) }

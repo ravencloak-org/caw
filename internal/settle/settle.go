@@ -23,11 +23,27 @@ type Publisher interface {
 	Publish(key string, msg []byte) int
 }
 
+// MergeabilityPoller polls a PR's mergeability after a Round settles — the one
+// poll in the system (CONTEXT.md). It returns a signal to fold into the summary;
+// ok=false skips it.
+type MergeabilityPoller interface {
+	Mergeability(owner, repo string, number int, sha string) (store.Signal, bool, error)
+}
+
+// Option configures an Engine.
+type Option func(*Engine)
+
+// WithPoller wires a mergeability poller invoked at each settle.
+func WithPoller(p MergeabilityPoller) Option {
+	return func(e *Engine) { e.poller = p }
+}
+
 // Engine schedules and fires Round settles.
 type Engine struct {
-	store *store.Store
-	pub   Publisher
-	grace time.Duration
+	store  *store.Store
+	pub    Publisher
+	grace  time.Duration
+	poller MergeabilityPoller // optional; nil disables the mergeability poll
 
 	mu     sync.Mutex
 	rounds map[string]*roundState
@@ -42,11 +58,15 @@ type roundState struct {
 }
 
 // New builds an Engine. A non-positive grace falls back to DefaultGrace.
-func New(st *store.Store, pub Publisher, grace time.Duration) *Engine {
+func New(st *store.Store, pub Publisher, grace time.Duration, opts ...Option) *Engine {
 	if grace <= 0 {
 		grace = DefaultGrace
 	}
-	return &Engine{store: st, pub: pub, grace: grace, rounds: make(map[string]*roundState)}
+	e := &Engine{store: st, pub: pub, grace: grace, rounds: make(map[string]*roundState)}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 func roundKey(owner, repo string, number int, sha string) string {
@@ -103,6 +123,19 @@ func (e *Engine) fire(rk string) {
 	seq := rs.seq
 	owner, repo, number, sha := rs.owner, rs.repo, rs.number, rs.sha
 	e.mu.Unlock()
+
+	// The one poll in the system: re-verify mergeability at settle time and fold
+	// it in as a signal (ADR-0004). A stable ExternalID replaces the prior poll.
+	if e.poller != nil {
+		switch sig, ok, err := e.poller.Mergeability(owner, repo, number, sha); {
+		case err != nil:
+			log.Printf("settle %s: mergeability poll: %v", rk, err)
+		case ok:
+			if err := e.store.AddSignal(sig); err != nil {
+				log.Printf("settle %s: add mergeability: %v", rk, err)
+			}
+		}
+	}
 
 	signals, err := e.store.SignalsForRound(owner, repo, number, sha)
 	if err != nil {

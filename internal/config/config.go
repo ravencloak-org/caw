@@ -14,6 +14,11 @@ type Config struct {
 	// OTLPEndpoint, when set, is where telemetry is exported (ADR-0008).
 	// Empty disables export.
 	OTLPEndpoint string
+	// GitHubToken authenticates the mergeability poll (stopgap until the
+	// GitHub App installation tokens of Slice 5). Empty disables polling.
+	GitHubToken string
+	// GitHubAPIBase overrides the GitHub API base URL (tests / GH Enterprise).
+	GitHubAPIBase string
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -23,6 +28,8 @@ func Load() Config {
 		DatabasePath:        getenv("CAW_DB", "caw.db"),
 		GitHubWebhookSecret: os.Getenv("CAW_GH_WEBHOOK_SECRET"),
 		OTLPEndpoint:        os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		GitHubToken:         os.Getenv("CAW_GITHUB_TOKEN"),
+		GitHubAPIBase:       os.Getenv("CAW_GITHUB_API"),
 	}
 }
 
