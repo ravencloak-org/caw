@@ -89,4 +89,10 @@ func TestDeriveRound(t *testing.T) {
 			t.Fatal("expected ok=false when no PR/check_suite present")
 		}
 	})
+
+	t.Run("no repository", func(t *testing.T) {
+		if _, ok := DeriveRound(github.Envelope{}); ok {
+			t.Fatal("expected ok=false when repository is absent")
+		}
+	})
 }

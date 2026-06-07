@@ -1,0 +1,18 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto      # never drop below the current level
+        threshold: 1%
+    patch:
+      default:
+        target: 80%       # new/changed code must be well covered
+        threshold: 5%
+
+# main() is thin server wiring exercised by running the binary, not unit tests.
+ignore:
+  - "cmd/hub/main.go"
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true

@@ -1,5 +1,8 @@
 # Caw
 
+[![CI](https://github.com/ravencloak-org/caw/actions/workflows/ci.yml/badge.svg)](https://github.com/ravencloak-org/caw/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/ravencloak-org/caw/branch/main/graph/badge.svg)](https://codecov.io/gh/ravencloak-org/caw)
+
 > Push PR feedback to the agent that raised the PR — so it fixes its own PR without being prodded.
 
 When an AI agent raises a pull request, getting it green (CI, review comments, mergeability) usually means a human babysitting the PR and re-prompting the agent every time something fails. Caw inverts that: GitHub webhooks are compiled into a single summary and **pushed** to the agent over a held-open SSE connection, so the agent that raised the PR keeps working it on its own. If that agent is gone, the summary waits as a *pending item* for the next agent to pick up.

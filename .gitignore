@@ -13,3 +13,7 @@ entities.json
 *.db-wal
 *.db-shm
 .env
+
+# Coverage
+coverage.out
+coverage.html
