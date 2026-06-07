@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "1d5b42cab415",
+  "session_id": "ed110f40-811f-4948-82a9-896e3ea3ca15",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-07T02:26:08.048419Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "f6470a8c-5d17-4132-9424-9fc3419363a6",
+  "checkpoint_transcript_start": 306,
+  "transcript_lines_at_start": 306,
+  "token_usage": {
+    "input_tokens": 282,
+    "cache_creation_tokens": 271537,
+    "cache_read_tokens": 1464388,
+    "output_tokens": 18122,
+    "api_call_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-07T02:26:07.992556Z",
+    "agent_lines": 6,
+    "human_added": 15,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 21,
+    "agent_percentage": 28.57142857142857
+  }
+}

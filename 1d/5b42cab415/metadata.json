@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "1d5b42cab415",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1d/5b42cab415/0/metadata.json",
+      "transcript": "/1d/5b42cab415/0/full.jsonl",
+      "context": "/1d/5b42cab415/0/context.md",
+      "content_hash": "/1d/5b42cab415/0/content_hash.txt",
+      "prompt": "/1d/5b42cab415/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 282,
+    "cache_creation_tokens": 271537,
+    "cache_read_tokens": 1464388,
+    "output_tokens": 18122,
+    "api_call_count": 12
+  }
+}
