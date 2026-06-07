@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "ed871c884c7b",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".gitignore",
+    "CONTEXT.md",
+    "Dockerfile",
+    "README.md",
+    "cmd/hub/main.go",
+    "docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md",
+    "docs/adr/0002-agent-owned-rebase.md",
+    "docs/adr/0003-sse-auth-via-hub-minted-installation-token.md",
+    "docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md",
+    "docs/adr/0005-hub-granted-rebase-lease.md",
+    "docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md",
+    "docs/adr/0007-subscriptions-fan-out.md",
+    "docs/adr/0008-observability-via-otel-and-bundled-openobserve.md",
+    "internal/config/config.go",
+    "internal/github/events.go",
+    "internal/hub/round.go",
+    "internal/hub/webhook.go",
+    "internal/hub/webhook_test.go",
+    "internal/store/schema.sql",
+    "internal/store/store.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ed/871c884c7b/0/metadata.json",
+      "transcript": "/ed/871c884c7b/0/full.jsonl",
+      "context": "/ed/871c884c7b/0/context.md",
+      "content_hash": "/ed/871c884c7b/0/content_hash.txt",
+      "prompt": "/ed/871c884c7b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2671,
+    "cache_creation_tokens": 35415,
+    "cache_read_tokens": 2082496,
+    "output_tokens": 29463,
+    "api_call_count": 10
+  }
+}
