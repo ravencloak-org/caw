@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "cd1a22182c58",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".claude/settings.local.json",
+    "CONTEXT.md",
+    "README.md",
+    "docs/adr/0002-agent-owned-rebase.md",
+    "docs/adr/0003-sse-auth-via-hub-minted-installation-token.md",
+    "docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md",
+    "docs/adr/0005-hub-granted-rebase-lease.md",
+    "docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md",
+    "docs/adr/0007-subscriptions-fan-out.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cd/1a22182c58/0/metadata.json",
+      "transcript": "/cd/1a22182c58/0/full.jsonl",
+      "context": "/cd/1a22182c58/0/context.md",
+      "content_hash": "/cd/1a22182c58/0/content_hash.txt",
+      "prompt": "/cd/1a22182c58/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28031,
+    "cache_creation_tokens": 269593,
+    "cache_read_tokens": 2372508,
+    "output_tokens": 65871,
+    "api_call_count": 28
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "cd1a22182c58",
+  "session_id": "ed110f40-811f-4948-82a9-896e3ea3ca15",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-07T02:13:59.023592Z",
+  "branch": "main",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".claude/settings.local.json",
+    "CONTEXT.md",
+    "README.md",
+    "docs/adr/0002-agent-owned-rebase.md",
+    "docs/adr/0003-sse-auth-via-hub-minted-installation-token.md",
+    "docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md",
+    "docs/adr/0005-hub-granted-rebase-lease.md",
+    "docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md",
+    "docs/adr/0007-subscriptions-fan-out.md"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "b81709f5-7c1b-4700-b4e7-68dbbd730868",
+  "token_usage": {
+    "input_tokens": 28031,
+    "cache_creation_tokens": 269593,
+    "cache_read_tokens": 2372508,
+    "output_tokens": 65871,
+    "api_call_count": 28
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-07T02:13:58.975571Z",
+    "agent_lines": 169,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 15,
+    "total_committed": 169,
+    "agent_percentage": 100
+  }
+}
