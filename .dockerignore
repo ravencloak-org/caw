@@ -1,0 +1,40 @@
+# Version control
+.git
+.gitignore
+
+# SQLite databases / local data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+
+# Build outputs
+dist/
+bin/
+out/
+
+# Docs (not needed in the build)
+docs/
+*.md
+README.md
+CONTEXT.md
+HANDOFF.md
+
+# Agent / tooling scratch
+.entire/
+.claude/
+
+# Deploy/compose files (not needed inside the image)
+Dockerfile
+.dockerignore
+docker-compose.yml
+.env
+.env.example
+
+# Editor / OS cruft
+.idea/
+.vscode/
+.DS_Store
+*.swp

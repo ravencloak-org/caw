@@ -2,3 +2,14 @@
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# Go build output
+/bin/
+/out/
+/dist/
+
+# Local runtime
+*.db
+*.db-wal
+*.db-shm
+.env

@@ -1,0 +1,48 @@
+# Caw Hub — self-host stack: Hub + bundled OpenObserve (default OTLP sink).
+# See docs/adr/0001 (portable Go + SQLite) and docs/adr/0008 (OTel + OpenObserve).
+# Copy .env.example -> .env and fill in secrets before `docker compose up`.
+
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: caw-hub:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Hub config
+      CAW_ADDR: ":8080"
+      CAW_DB: "/data/caw.db"
+      CAW_GH_WEBHOOK_SECRET: "${CAW_GH_WEBHOOK_SECRET}"
+
+      # OpenTelemetry -> OpenObserve (OTLP gRPC on :5081).
+      # Unset OTEL_EXPORTER_OTLP_ENDPOINT to disable export entirely (ADR-0008).
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://openobserve:5081"
+      # Basic auth + org/stream routing for OpenObserve's OTLP endpoint.
+      # Authorization = "Basic " + base64(email:password). See .env.example.
+      OTEL_EXPORTER_OTLP_HEADERS: "${OTEL_EXPORTER_OTLP_HEADERS}"
+    volumes:
+      - hub-data:/data
+    depends_on:
+      - openobserve
+
+  openobserve:
+    # Single-node mode: SQLite metadata + local disk, no Postgres/NATS (ADR-0008).
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    restart: unless-stopped
+    ports:
+      - "5080:5080"   # Web UI + HTTP API
+      - "5081:5081"   # OTLP gRPC ingestion
+    environment:
+      ZO_ROOT_USER_EMAIL: "${ZO_ROOT_USER_EMAIL}"
+      ZO_ROOT_USER_PASSWORD: "${ZO_ROOT_USER_PASSWORD}"
+      # Local-disk data dir inside the container.
+      ZO_DATA_DIR: "/data"
+    volumes:
+      - openobserve-data:/data
+
+volumes:
+  hub-data:
+  openobserve-data:
