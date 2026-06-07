@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-06-07
+**Amended:** 2026-06-07 — subscriptions now fan out (many listeners per PR); the single-owner rule below applies **only to the rebase / force-push**, expressed as a per-PR **Rebase lease**. Ordinary fixes from concurrent listeners are arbitrated by git's non-fast-forward rejection and need no lease. See CONTEXT.md → *Rebase lease*.
 
 ## Decision
 

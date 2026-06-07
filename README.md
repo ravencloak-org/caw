@@ -16,9 +16,9 @@ GitHub ──webhooks──▶ Hub ──compile──▶ SSE push ──▶ Wat
                       └─ no listener? store as Pending item ──▶ next Session's startup check ──▶ prompt human
 ```
 
-**Live path.** A **Session** raises a PR; its **Watcher** (a local MCP server) opens and *holds* an SSE connection to the **Hub** keyed `owner/repo#number`. The Hub ingests that **Round**'s GitHub webhooks; once checks settle (`check_suite completed` + ~30s grace) it runs the one poll (mergeability), compiles **one** summary, and pushes it down the held connection. The Session acts in the PR's worktree, pushes, and the next Round begins. A new push supersedes the prior Round's unacked items (state is keyed by head SHA).
+**Live path.** A **Session** raises a PR; its **Watcher** (a local MCP server) opens and *holds* an SSE connection to the **Hub** keyed `owner/repo#number`. Many Sessions may subscribe to the same PR — summaries **fan out** to all listeners. The Hub ingests that **Round**'s GitHub webhooks; once checks settle (`check_suite completed` + ~30s grace) it runs the one poll (mergeability), compiles a summary, and pushes it down the held connections. A late same-SHA signal (async review comment, flipped check) **re-settles** the Round and pushes a follow-up (one summary *per settle* — [ADR-0004](./docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md)). The Session acts in the PR's worktree, pushes, and the next Round begins. A new head SHA supersedes the prior Round.
 
-**Catch-up path.** No live Subscription (Session closed) → the summary is stored as a **Pending item**. A brand-new Session makes **one** request at startup ("anything pending?"), surfaced by a SessionStart hook, and prompts the human before acting on work it didn't start.
+**Catch-up path.** Zero live Subscriptions → the summary is stored as a **Pending item** (latest-state per signal-type — [ADR-0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md)). A brand-new Session makes **one** request at startup ("anything pending?"), surfaced by a SessionStart hook, gets *all* current items, and prompts the human before acting on work it didn't start.
 
 **The only poll in the whole system** is the mergeability/conflict re-verify after a Round settles. Everything else is webhook push (GitHub → Hub) and SSE push (Hub → Watcher). The startup pending-check is a single one-shot request, not polling.
 
@@ -30,9 +30,11 @@ Feedback is surfaced as three dynamic signal-types; sources within each are attr
 |---|---|---|
 | **Checks** | `check_suite` failures | CI, Squawk-as-check, Sonar-as-check… |
 | **Comments** | `pull_request_review`, `pull_request_review_comment`, `issue_comment` | Any bot or human; severity normalised for first-class sources (CodeRabbit first) |
-| **Mergeability** | poll of `GET /pulls/{n}` after settle | Behind-base & clean → Session rebases; orphan → Hub rebases; then auto-merge |
+| **Mergeability** | poll of `GET /pulls/{n}` after settle | Behind-base & clean → rebase under a Hub-granted single-owner **rebase lease** (listener, or Hub for orphans — [ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)); then auto-merge |
 
 Severity renders as **label + symbol + colour** (e.g. `■ CRITICAL` / `▲ MAJOR` / `· minor`), never colour alone — readable on colourblind-accessible terminal themes and on no-colour terminals.
+
+**Mapping onto the ladder.** The severity ladder is **closed** (a fixed 3–4 levels); the **adapters** that map each source's own vocabulary onto it are **open/pluggable** — matching "sources attributed dynamically, never hardcoded." Each first-class source (CodeRabbit first) ships a parser; everything else falls through to defaults (failing check → `MAJOR`; bare human/bot comment or unparseable → `minor`). New sources = new adapters, no ladder change. (Reversible; parked here, not an ADR.)
 
 ## Components
 
@@ -41,16 +43,16 @@ One portable service; identical artifact self-hosted or run as SaaS ([ADR-0001](
 
 - **Webhook ingress** — `POST /webhooks/github`, verifies `X-Hub-Signature-256`, dedupes, buckets by `owner/repo#number @ sha` (Round).
 - **Round settle** — on `check_suite completed` + grace window, run the mergeability poll, compile the summary.
-- **SSE** — `GET /sse/{owner}/{repo}/{number}` (authenticated); pushes compiled summaries to a held connection.
-- **Pending store** — SQLite; summaries with no live subscriber persisted until acked. `GET /pending` (one-shot startup check), `POST /ack`.
-- **Rebase fallback** — for orphaned PRs only: "Update branch" + enable auto-merge ([ADR-0002](./docs/adr/0002-agent-owned-rebase.md)).
+- **SSE** — `GET /sse/{owner}/{repo}/{number}` (authenticated via Hub-minted installation token — [ADR-0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)); fans compiled summaries out to all held connections for the key.
+- **Pending store** — SQLite; latest summary per PR per signal-type when no listener; newer same-type events replace, nothing else clears. `GET /pending` (one-shot startup check, returns all). No `ack` ([ADR-0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md)).
+- **Rebase lease** — Hub grants the single force-push lease to one actor; for orphaned PRs the Hub itself takes it: "Update branch" + enable auto-merge ([ADR-0002](./docs/adr/0002-agent-owned-rebase.md), [ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)).
 
 ### Watcher (MCP server)
 Local, runs in the harness; the universal contract across harnesses.
 
-- `subscribe_pr(owner, repo, number)` — opens & holds the SSE for the Round; returns compiled summaries as they arrive.
-- `get_pending()` — one-shot; returns unacked Pending items across the user's PRs.
-- `ack(key)` — marks a summary handled.
+- `subscribe_pr(owner, repo, number)` — opens & holds the SSE; returns compiled summaries as they arrive (fan-out: co-existing with other listeners is fine).
+- `get_pending()` — one-shot; returns all current Pending items across the installation, each with `timestamp`, head `SHA`, and PR state for relevance filtering.
+- `acquire_rebase_lease(owner, repo, number)` — requests the single force-push lease before rebasing; granted to one actor ([ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)).
 - Renders summaries (label + symbol + colour). SessionStart hook reminds the agent to call `get_pending()`.
 
 ### GitHub App
@@ -70,7 +72,7 @@ Auth for both modes via the App Manifest flow ([ADR rationale in CONTEXT](./CONT
 ## Build slices (suggested order)
 
 1. **Hub core** — webhook ingest + signature verify + Round bucketing + SQLite pending store.
-2. **Compile + SSE** — `check_suite`+grace settle, summary compiler, SSE push, `get_pending`/`ack`.
+2. **Compile + SSE** — `check_suite`+grace settle (+ same-SHA re-settle), summary compiler, fan-out SSE push, installation-token auth, `get_pending`.
 3. **Mergeability poll** — settle-time poll; emit the Mergeability signal.
 4. **Watcher MCP** — `subscribe_pr` / `get_pending` / `ack`, summary rendering, SessionStart hook.
 5. **GitHub App + Manifest** — App, install/manifest flows, installation tokens.
@@ -81,9 +83,10 @@ Auth for both modes via the App Manifest flow ([ADR rationale in CONTEXT](./CONT
 
 - Exact GitHub App permission scopes.
 - CodeRabbit comment format → severity parsing (and the next first-class source).
-- SSE auth: how the Watcher proves it owns `owner/repo#number` (tie to App installation / a per-Session token).
-- Grace-window duration (start ~30s; tune).
+- Grace-window duration (start ~30s; tune) and rebase-lease TTL (~60–120s; tune).
 - Channels: re-add as an optional Claude push lane once it reaches general release.
+
+_Resolved during design grilling: SSE auth ([ADR-0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)); fan-out vs. single-owner ([ADR-0002](./docs/adr/0002-agent-owned-rebase.md) amend, [ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)); re-settle ([ADR-0004](./docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md)); pending model ([ADR-0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md))._
 
 ## Status
 
