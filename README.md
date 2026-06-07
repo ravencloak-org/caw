@@ -38,8 +38,8 @@ Severity renders as **label + symbol + colour** (e.g. `■ CRITICAL` / `▲ MAJO
 
 ## Components
 
-### Hub (Go + SQLite)
-One portable service; identical artifact self-hosted or run as SaaS ([ADR-0001](./docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md)).
+### Hub (Go + Gin + SQLite)
+One portable service; identical artifact self-hosted or run as SaaS ([ADR-0001](./docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md)). HTTP layer is Gin (SSE routes exempted from buffering middleware).
 
 - **Webhook ingress** — `POST /webhooks/github`, verifies `X-Hub-Signature-256`, dedupes, buckets by `owner/repo#number @ sha` (Round).
 - **Round settle** — on `check_suite completed` + grace window, run the mergeability poll, compile the summary.
