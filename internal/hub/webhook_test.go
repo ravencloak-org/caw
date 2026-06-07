@@ -54,14 +54,9 @@ func TestDeriveRound(t *testing.T) {
 
 	t.Run("from pull_request", func(t *testing.T) {
 		e := mk()
-		e.PullRequest = &struct {
-			Number int    `json:"number"`
-			State  string `json:"state"`
-			Head   struct {
-				SHA string `json:"sha"`
-			} `json:"head"`
-		}{Number: 42}
-		e.PullRequest.Head.SHA = "deadbeef"
+		pr := &github.PullRequest{Number: 42}
+		pr.Head.SHA = "deadbeef"
+		e.PullRequest = pr
 		key, ok := DeriveRound(e)
 		if !ok || key.String() != "ravencloak-org/caw#42@deadbeef" {
 			t.Fatalf("got %v ok=%v", key, ok)
@@ -70,14 +65,10 @@ func TestDeriveRound(t *testing.T) {
 
 	t.Run("from check_suite", func(t *testing.T) {
 		e := mk()
-		e.CheckSuite = &struct {
-			HeadSHA      string `json:"head_sha"`
-			PullRequests []struct {
-				Number int `json:"number"`
-			} `json:"pull_requests"`
-		}{HeadSHA: "cafef00d", PullRequests: []struct {
-			Number int `json:"number"`
-		}{{Number: 7}}}
+		e.CheckSuite = &github.CheckSuite{
+			HeadSHA:      "cafef00d",
+			PullRequests: []github.CheckSuitePR{{Number: 7}},
+		}
 		key, ok := DeriveRound(e)
 		if !ok || key.String() != "ravencloak-org/caw#7@cafef00d" {
 			t.Fatalf("got %v ok=%v", key, ok)

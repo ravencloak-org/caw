@@ -22,7 +22,7 @@ func newHarness(t *testing.T, secret []byte) (*gin.Engine, *store.Store) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	r := gin.New()
-	r.POST("/webhooks/github", New(st, secret).HandleWebhook)
+	r.POST("/webhooks/github", New(st, secret, nil).HandleWebhook)
 	return r, st
 }
 
@@ -140,7 +140,7 @@ func TestHandleWebhook_StoreErrorReturns500(t *testing.T) {
 	_ = st.Close() // force the dedupe query to fail
 
 	r := gin.New()
-	r.POST("/webhooks/github", New(st, secret).HandleWebhook)
+	r.POST("/webhooks/github", New(st, secret, nil).HandleWebhook)
 
 	w := post(r, prBody, map[string]string{
 		"X-Hub-Signature-256": sign(secret, prBody),
@@ -149,5 +149,88 @@ func TestHandleWebhook_StoreErrorReturns500(t *testing.T) {
 	})
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
+	}
+}
+
+const repoJSON = `"repository":{"name":"caw","owner":{"login":"ravencloak-org"}}`
+
+func TestIngest_CheckSuiteFailureAddsChecksSignal(t *testing.T) {
+	secret := []byte("s3cr3t")
+	r, st := newHarness(t, secret)
+	body := []byte(`{"action":"completed","check_suite":{"id":99,"head_sha":"sha1","conclusion":"failure","app":{"name":"CI"},"pull_requests":[{"number":1}]},` + repoJSON + `}`)
+	if w := post(r, body, map[string]string{
+		"X-Hub-Signature-256": sign(secret, body), "X-GitHub-Event": "check_suite", "X-GitHub-Delivery": "cs1",
+	}); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", w.Code)
+	}
+	sigs, err := st.SignalsForRound("ravencloak-org", "caw", 1, "sha1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sigs) != 1 || sigs[0].SignalType != "checks" || sigs[0].Source != "CI" {
+		t.Fatalf("signals = %+v, want one checks/CI", sigs)
+	}
+}
+
+func TestIngest_CheckSuiteSuccessNoSignal(t *testing.T) {
+	secret := []byte("s3cr3t")
+	r, st := newHarness(t, secret)
+	body := []byte(`{"action":"completed","check_suite":{"id":1,"head_sha":"shaP","conclusion":"success","app":{"name":"CI"},"pull_requests":[{"number":2}]},` + repoJSON + `}`)
+	if w := post(r, body, map[string]string{
+		"X-Hub-Signature-256": sign(secret, body), "X-GitHub-Event": "check_suite", "X-GitHub-Delivery": "cs2",
+	}); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if ok, _ := st.RoundExists("ravencloak-org", "caw", 2, "shaP"); !ok {
+		t.Fatal("round should be recorded even on success")
+	}
+	if sigs, _ := st.SignalsForRound("ravencloak-org", "caw", 2, "shaP"); len(sigs) != 0 {
+		t.Fatalf("success must add no signal, got %+v", sigs)
+	}
+}
+
+func TestIngest_ReviewAddsCommentSignal(t *testing.T) {
+	secret := []byte("s3cr3t")
+	r, st := newHarness(t, secret)
+	body := []byte(`{"action":"submitted","pull_request":{"number":3,"head":{"sha":"shaR"}},"review":{"id":5,"body":"please fix"},"sender":{"login":"alice"},` + repoJSON + `}`)
+	if w := post(r, body, map[string]string{
+		"X-Hub-Signature-256": sign(secret, body), "X-GitHub-Event": "pull_request_review", "X-GitHub-Delivery": "rv1",
+	}); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", w.Code)
+	}
+	sigs, _ := st.SignalsForRound("ravencloak-org", "caw", 3, "shaR")
+	if len(sigs) != 1 || sigs[0].SignalType != "comments" || sigs[0].Source != "alice" {
+		t.Fatalf("signals = %+v, want one comments/alice", sigs)
+	}
+}
+
+func TestIngest_IssueCommentUsesLatestRound(t *testing.T) {
+	secret := []byte("s3cr3t")
+	r, st := newHarness(t, secret)
+	pr := []byte(`{"action":"opened","pull_request":{"number":7,"head":{"sha":"shaZ"}},` + repoJSON + `}`)
+	post(r, pr, map[string]string{"X-Hub-Signature-256": sign(secret, pr), "X-GitHub-Event": "pull_request", "X-GitHub-Delivery": "pr7"})
+	ic := []byte(`{"action":"created","issue":{"number":7},"comment":{"id":3,"body":"hi"},"sender":{"login":"bob"},` + repoJSON + `}`)
+	if w := post(r, ic, map[string]string{
+		"X-Hub-Signature-256": sign(secret, ic), "X-GitHub-Event": "issue_comment", "X-GitHub-Delivery": "ic1",
+	}); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", w.Code)
+	}
+	sigs, _ := st.SignalsForRound("ravencloak-org", "caw", 7, "shaZ")
+	if len(sigs) != 1 || sigs[0].SignalType != "comments" || sigs[0].Source != "bob" {
+		t.Fatalf("signals = %+v, want one comments/bob on shaZ", sigs)
+	}
+}
+
+func TestIngest_IssueCommentNoRoundSkips(t *testing.T) {
+	secret := []byte("s3cr3t")
+	r, st := newHarness(t, secret)
+	ic := []byte(`{"action":"created","issue":{"number":999},"comment":{"id":1,"body":"x"},"sender":{"login":"bob"},` + repoJSON + `}`)
+	if w := post(r, ic, map[string]string{
+		"X-Hub-Signature-256": sign(secret, ic), "X-GitHub-Event": "issue_comment", "X-GitHub-Delivery": "ic2",
+	}); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if sigs, _ := st.SignalsForRound("ravencloak-org", "caw", 999, ""); len(sigs) != 0 {
+		t.Fatalf("no known round => no signal, got %+v", sigs)
 	}
 }

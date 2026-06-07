@@ -1,13 +1,14 @@
 // Command hub is the Caw Hub: it ingests GitHub webhooks, compiles PR feedback
-// into summaries, and (in later slices) pushes them to Watchers over SSE.
+// into summaries, fans them out to Watchers over SSE, and stores orphaned
+// feedback as pending items.
 //
-// Slice 1 wires the HTTP server, webhook signature verification, delivery
-// dedupe, Round bucketing, and the SQLite store.
+// Subcommand: `hub mint-token <installation_id> [org]` prints a new raw token.
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -15,10 +16,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
+	"github.com/ravencloak-org/caw/internal/auth"
 	"github.com/ravencloak-org/caw/internal/config"
-	"github.com/ravencloak-org/caw/internal/hub"
+	"github.com/ravencloak-org/caw/internal/server"
+	"github.com/ravencloak-org/caw/internal/settle"
+	"github.com/ravencloak-org/caw/internal/sse"
 	"github.com/ravencloak-org/caw/internal/store"
 )
 
@@ -31,16 +33,20 @@ func main() {
 	}
 	defer func() { _ = st.Close() }()
 
+	if len(os.Args) > 1 && os.Args[1] == "mint-token" {
+		if err := mintToken(st, os.Args[2:]); err != nil {
+			log.Fatalf("mint-token: %v", err)
+		}
+		return
+	}
+
 	if cfg.GitHubWebhookSecret == "" {
 		log.Println("warning: CAW_GH_WEBHOOK_SECRET is empty; all webhooks will be rejected")
 	}
 
-	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
-
-	h := hub.New(st, []byte(cfg.GitHubWebhookSecret))
-	r.POST("/webhooks/github", h.HandleWebhook)
-	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	sseHub := sse.New()
+	engine := settle.New(st, sseHub, settle.DefaultGrace)
+	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret))
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
@@ -65,5 +71,25 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
-	_ = os.Stdout.Sync()
+}
+
+// mintToken creates and stores an installation token, printing the raw value
+// (shown once). Args: <installation_id> [org].
+func mintToken(st *store.Store, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: hub mint-token <installation_id> [org]")
+	}
+	org := ""
+	if len(args) > 1 {
+		org = args[1]
+	}
+	raw, hash, err := auth.GenerateToken()
+	if err != nil {
+		return err
+	}
+	if err := st.InsertToken(hash, args[0], org); err != nil {
+		return err
+	}
+	fmt.Println(raw)
+	return nil
 }

@@ -152,3 +152,67 @@ func TestStoreErrorsAfterClose(t *testing.T) {
 		t.Error("ListPending should error after close")
 	}
 }
+
+func TestSignalsAddReplaceAndList(t *testing.T) {
+	s := newTestStore(t)
+	mk := func(extID, body string) Signal {
+		return Signal{Owner: "o", Repo: "r", Number: 1, SHA: "sha", SignalType: "checks", Source: "CI", ExternalID: extID, Body: body}
+	}
+	for _, sig := range []Signal{mk("e1", "first"), mk("e1", "second"), mk("e2", "other")} {
+		if err := s.AddSignal(sig); err != nil {
+			t.Fatalf("AddSignal: %v", err)
+		}
+	}
+	sigs, err := s.SignalsForRound("o", "r", 1, "sha")
+	if err != nil {
+		t.Fatalf("SignalsForRound: %v", err)
+	}
+	if len(sigs) != 2 {
+		t.Fatalf("got %d signals, want 2 (e1 replaced)", len(sigs))
+	}
+	for _, sig := range sigs {
+		if sig.ExternalID == "e1" && sig.Body != "second" {
+			t.Fatalf("e1 not replaced: body = %q", sig.Body)
+		}
+	}
+	if other, _ := s.SignalsForRound("o", "r", 1, "different"); len(other) != 0 {
+		t.Fatalf("other SHA should have no signals, got %d", len(other))
+	}
+}
+
+func TestLatestRoundSHA(t *testing.T) {
+	s := newTestStore(t)
+	if _, ok, err := s.LatestRoundSHA("o", "r", 1); err != nil || ok {
+		t.Fatalf("no rounds yet: ok=%v err=%v, want false/nil", ok, err)
+	}
+	if err := s.RecordRound("o", "r", 1, "sha1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordRound("o", "r", 1, "sha2"); err != nil {
+		t.Fatal(err)
+	}
+	sha, ok, err := s.LatestRoundSHA("o", "r", 1)
+	if err != nil || !ok || sha != "sha2" {
+		t.Fatalf("LatestRoundSHA = (%q, %v, %v), want (sha2, true, nil)", sha, ok, err)
+	}
+}
+
+func TestTokensInsertVerifyUpsert(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.InsertToken("hashA", "inst1", "org1"); err != nil {
+		t.Fatal(err)
+	}
+	id, ok, err := s.VerifyToken("hashA")
+	if err != nil || !ok || id != "inst1" {
+		t.Fatalf("VerifyToken known = (%q, %v, %v), want (inst1, true, nil)", id, ok, err)
+	}
+	if _, ok, err := s.VerifyToken("unknown"); err != nil || ok {
+		t.Fatalf("VerifyToken unknown = (ok=%v, err=%v), want (false, nil)", ok, err)
+	}
+	if err := s.InsertToken("hashA", "inst2", ""); err != nil { // upsert
+		t.Fatal(err)
+	}
+	if id, _, _ := s.VerifyToken("hashA"); id != "inst2" {
+		t.Fatalf("after upsert id = %q, want inst2", id)
+	}
+}
