@@ -1,29 +1,27 @@
+version: "2"
+
 run:
   timeout: 5m
 
 linters:
-  disable-all: true
+  default: none
   enable:
-    - govet
-    - staticcheck
     - errcheck
+    - govet
     - ineffassign
-    - unused
-    - gosimple
-    - gofmt
-    - goimports
     - misspell
     - revive
+    - staticcheck
+    - unused
+  settings:
+    misspell:
+      locale: US
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/ravencloak-org/caw
-  govet:
-    enable-all: true
-  misspell:
-    locale: US
-
-issues:
-  exclude-use-default: false
-  max-issues-per-linter: 0
-  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ravencloak-org/caw

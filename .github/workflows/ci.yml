@@ -43,6 +43,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1" # -race requires cgo; overrides the cgo-free build default
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

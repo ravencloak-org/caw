@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" database/sql driver
 )
 
 //go:embed schema.sql
