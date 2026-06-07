@@ -18,6 +18,8 @@ import (
 
 	"github.com/ravencloak-org/caw/internal/auth"
 	"github.com/ravencloak-org/caw/internal/config"
+	"github.com/ravencloak-org/caw/internal/ghclient"
+	"github.com/ravencloak-org/caw/internal/mergeability"
 	"github.com/ravencloak-org/caw/internal/server"
 	"github.com/ravencloak-org/caw/internal/settle"
 	"github.com/ravencloak-org/caw/internal/sse"
@@ -45,7 +47,14 @@ func main() {
 	}
 
 	sseHub := sse.New()
-	engine := settle.New(st, sseHub, settle.DefaultGrace)
+	var opts []settle.Option
+	if cfg.GitHubToken != "" {
+		poller := mergeability.New(ghclient.New(cfg.GitHubAPIBase, cfg.GitHubToken))
+		opts = append(opts, settle.WithPoller(poller))
+	} else {
+		log.Println("warning: CAW_GITHUB_TOKEN is empty; mergeability polling disabled")
+	}
+	engine := settle.New(st, sseHub, settle.DefaultGrace, opts...)
 	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret))
 
 	srv := &http.Server{
