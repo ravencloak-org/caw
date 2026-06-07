@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "c83016990a32",
+  "session_id": "9237228e-d108-44c2-bc18-a716df89dc78",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-07T22:03:59.559273Z",
+  "branch": "slice-3-mergeability",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/mergeability/poller.go",
+    "internal/mergeability/poller_test.go"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "6fcf37dc-c097-4645-a401-281c61bff2e5",
+  "token_usage": {
+    "input_tokens": 27540,
+    "cache_creation_tokens": 167174,
+    "cache_read_tokens": 985626,
+    "output_tokens": 13013,
+    "api_call_count": 18
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-07T22:03:59.536078Z",
+    "agent_lines": 118,
+    "human_added": 224,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 342,
+    "agent_percentage": 34.50292397660819
+  }
+}
