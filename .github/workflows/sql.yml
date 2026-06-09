@@ -25,3 +25,33 @@ jobs:
       - run: pip install "sqlfluff==4.2.2"
       - name: Lint SQL
         run: sqlfluff lint .
+
+  schema-drift:
+    name: Schema drift gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so dolt log works inside the db/ subdirectory
+          fetch-depth: 0
+
+      - name: Install Dolt
+        run: |
+          curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
+          echo "$HOME/.dolt/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Regenerate dialect files
+        run: make schema
+
+      - name: Fail if generated files differ from committed versions
+        run: |
+          git diff --exit-code internal/store/schema.sql internal/store/postgres/schema.sql || {
+            echo ""
+            echo "ERROR: Generated schema files differ from committed versions."
+            echo "Run 'make schema' locally and commit the updated files."
+            exit 1
+          }

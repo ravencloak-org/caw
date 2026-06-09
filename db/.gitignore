@@ -1,0 +1,5 @@
+# Dolt lock files — transient; not needed for schema history
+.dolt/noms/LOCK
+.dolt/stats/
+# temptf is Dolt's scratch space
+.dolt/temptf/

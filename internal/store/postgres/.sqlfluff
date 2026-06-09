@@ -1,0 +1,4 @@
+# SQLFluff override for Postgres DDL.
+# Inherits all other settings from the root .sqlfluff; only dialect is overridden.
+[sqlfluff]
+dialect = postgres
