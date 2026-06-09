@@ -17,6 +17,9 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
+// testBootstrapToken is the operator secret the test handlers are gated behind.
+const testBootstrapToken = "boot-secret-123"
+
 // newTestStore opens an in-memory store for use in manifest tests.
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
@@ -33,16 +36,25 @@ func newTestStore(t *testing.T) *store.Store {
 	return st
 }
 
-// newManifestHandlerForTest constructs a ManifestHandler pointing to a fake
-// GitHub server and wires it into a Gin engine for HTTP testing.
-func newManifestHandlerForTest(t *testing.T, githubBase string, mintFn func(string, string) (string, error)) (*gin.Engine, *ManifestHandler) {
+// manifestTestOpts configures the handler built by newManifestHandlerForTest.
+type manifestTestOpts struct {
+	githubBase       string
+	mintFn           func(string, string) (string, error)
+	allowRebootstrap bool
+}
+
+// newManifestHandlerForTest constructs a ManifestHandler (gated by
+// testBootstrapToken) and wires it into a Gin engine for HTTP testing.
+func newManifestHandlerForTest(t *testing.T, opts manifestTestOpts) (*gin.Engine, *ManifestHandler, *store.Store) {
 	t.Helper()
 	st := newTestStore(t)
 	mh, err := NewManifestHandler(ManifestConfig{
-		BaseURL:    "http://hub.example.com",
-		GithubBase: githubBase,
-		Store:      st,
-		MintFn:     mintFn,
+		BaseURL:          "http://hub.example.com",
+		GithubBase:       opts.githubBase,
+		Store:            st,
+		MintFn:           opts.mintFn,
+		BootstrapToken:   testBootstrapToken,
+		AllowRebootstrap: opts.allowRebootstrap,
 	})
 	if err != nil {
 		t.Fatalf("NewManifestHandler: %v", err)
@@ -50,33 +62,110 @@ func newManifestHandlerForTest(t *testing.T, githubBase string, mintFn func(stri
 	r := gin.New()
 	r.GET("/github/app/manifest", mh.HandleManifest)
 	r.GET("/github/app/callback", mh.HandleCallback)
-	return r, mh
+	return r, mh, st
 }
 
-// TestNewManifestHandler_RequiresBaseURL verifies that a missing BaseURL is rejected.
+// manifestReq builds a GET /github/app/manifest request. When token is
+// non-empty it is carried as the operator bootstrap bearer token.
+func manifestReq(token string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/github/app/manifest", nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req
+}
+
+// callbackReq builds a GET /github/app/callback request with the given code and
+// state query params and, when cookieState is non-empty, the state cookie that
+// HandleManifest would have set.
+func callbackReq(code, queryState, cookieState string) *http.Request {
+	parts := make([]string, 0, 2)
+	if code != "" {
+		parts = append(parts, "code="+code)
+	}
+	if queryState != "" {
+		parts = append(parts, "state="+queryState)
+	}
+	target := "/github/app/callback"
+	if len(parts) > 0 {
+		target += "?" + strings.Join(parts, "&")
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	if cookieState != "" {
+		req.AddCookie(&http.Cookie{Name: stateCookieName, Value: cookieState})
+	}
+	return req
+}
+
+// fakeGitHubSuccess returns an httptest server that answers the manifest
+// conversion with valid App credentials.
+func fakeGitHubSuccess(t *testing.T, appID int64) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/app-manifests/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":             appID,
+			"client_id":      "Iv1.abc",
+			"client_secret":  "secret-cs",
+			"webhook_secret": "secret-ws",
+			"pem":            "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// seedCredentials persists a placeholder App credential so overwrite-protection
+// paths can be exercised.
+func seedCredentials(t *testing.T, st *store.Store) {
+	t.Helper()
+	if err := st.SaveAppCredentials(store.AppCredentials{
+		AppID:         "999",
+		ClientID:      "Iv1.existing",
+		ClientSecret:  "cs",
+		WebhookSecret: "ws",
+		PEM:           "-----BEGIN RSA PRIVATE KEY-----\nexisting\n-----END RSA PRIVATE KEY-----\n",
+	}); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+}
+
 func TestNewManifestHandler_RequiresBaseURL(t *testing.T) {
 	st := newTestStore(t)
-	_, err := NewManifestHandler(ManifestConfig{Store: st})
+	_, err := NewManifestHandler(ManifestConfig{Store: st, BootstrapToken: testBootstrapToken})
 	if err == nil {
 		t.Fatal("expected error for missing BaseURL")
 	}
 }
 
-// TestNewManifestHandler_RequiresStore verifies that a nil Store is rejected.
 func TestNewManifestHandler_RequiresStore(t *testing.T) {
-	_, err := NewManifestHandler(ManifestConfig{BaseURL: "http://hub.example.com"})
+	_, err := NewManifestHandler(ManifestConfig{BaseURL: "http://hub.example.com", BootstrapToken: testBootstrapToken})
 	if err == nil {
 		t.Fatal("expected error for nil Store")
 	}
 }
 
-// TestNewManifestHandler_DefaultGithubBase verifies that GithubBase defaults to
-// https://github.com when not set.
+// TestNewManifestHandler_RequiresBootstrapToken verifies the credential-minting
+// routes cannot be constructed without an operator bootstrap secret.
+func TestNewManifestHandler_RequiresBootstrapToken(t *testing.T) {
+	st := newTestStore(t)
+	_, err := NewManifestHandler(ManifestConfig{BaseURL: "http://hub.example.com", Store: st})
+	if err == nil {
+		t.Fatal("expected error for missing BootstrapToken")
+	}
+}
+
 func TestNewManifestHandler_DefaultGithubBase(t *testing.T) {
 	st := newTestStore(t)
 	mh, err := NewManifestHandler(ManifestConfig{
-		BaseURL: "http://hub.example.com",
-		Store:   st,
+		BaseURL:        "http://hub.example.com",
+		Store:          st,
+		BootstrapToken: testBootstrapToken,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -86,38 +175,106 @@ func TestNewManifestHandler_DefaultGithubBase(t *testing.T) {
 	}
 }
 
-// TestHandleManifest_HTML verifies that the manifest endpoint returns an HTML
-// page containing a form that POSTs to the GitHub apps/new URL.
-func TestHandleManifest_HTML(t *testing.T) {
-	r, _ := newManifestHandlerForTest(t, "https://github.test", nil)
+// TestHandleManifest_RequiresBootstrapAuth verifies the manifest route is gated:
+// an unauthenticated request is rejected with 401.
+func TestHandleManifest_RequiresBootstrapAuth(t *testing.T) {
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: "https://github.test"})
 
-	req := httptest.NewRequest(http.MethodGet, "/github/app/manifest", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, manifestReq("")) // no token
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+}
+
+// TestHandleManifest_WrongBootstrapToken verifies a bad token is rejected.
+func TestHandleManifest_WrongBootstrapToken(t *testing.T) {
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: "https://github.test"})
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, manifestReq("wrong-token"))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+}
+
+// TestHandleManifest_HTML verifies the authorized manifest endpoint returns the
+// self-submitting form and sets a CSRF state cookie.
+func TestHandleManifest_HTML(t *testing.T) {
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: "https://github.test"})
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, manifestReq(testBootstrapToken))
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `action=`) {
+	if !strings.Contains(body, "action=") {
 		t.Error("response should contain a form action attribute")
 	}
 	if !strings.Contains(body, `name="manifest"`) {
 		t.Error("response should contain a manifest hidden input")
 	}
-	// Manifest JSON should be embedded (check one stable field).
 	if !strings.Contains(body, "installation") {
 		t.Error("manifest JSON should include 'installation' event")
+	}
+
+	var stateCookie *http.Cookie
+	for _, ck := range w.Result().Cookies() {
+		if ck.Name == stateCookieName {
+			stateCookie = ck
+		}
+	}
+	if stateCookie == nil || stateCookie.Value == "" {
+		t.Fatal("manifest response should set a non-empty CSRF state cookie")
+	}
+	if !stateCookie.HttpOnly {
+		t.Error("state cookie should be HttpOnly")
+	}
+}
+
+// TestHandleManifest_RefusesOverwrite verifies that, once credentials exist, the
+// authorized manifest route refuses to overwrite them unless re-bootstrap is on.
+func TestHandleManifest_RefusesOverwrite(t *testing.T) {
+	r, _, st := newManifestHandlerForTest(t, manifestTestOpts{githubBase: "https://github.test"})
+	seedCredentials(t, st)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, manifestReq(testBootstrapToken))
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+}
+
+// TestHandleManifest_AllowsRebootstrap verifies that AllowRebootstrap permits
+// overwriting existing credentials.
+func TestHandleManifest_AllowsRebootstrap(t *testing.T) {
+	r, _, st := newManifestHandlerForTest(t, manifestTestOpts{
+		githubBase:       "https://github.test",
+		allowRebootstrap: true,
+	})
+	seedCredentials(t, st)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, manifestReq(testBootstrapToken))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
 }
 
 // TestHandleManifest_ManifestJSON verifies the embedded manifest contains the
-// expected fields (hook URL, redirect URL, default_events).
+// expected hook URL, redirect URL, and default_events.
 func TestHandleManifest_ManifestJSON(t *testing.T) {
 	st := newTestStore(t)
 	mh, err := NewManifestHandler(ManifestConfig{
-		BaseURL: "http://hub.example.com",
-		Store:   st,
+		BaseURL:        "http://hub.example.com",
+		Store:          st,
+		BootstrapToken: testBootstrapToken,
 	})
 	if err != nil {
 		t.Fatalf("NewManifestHandler: %v", err)
@@ -149,58 +306,67 @@ func TestHandleManifest_ManifestJSON(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_MissingCode checks that a missing code query param returns 400.
-func TestHandleCallback_MissingCode(t *testing.T) {
-	r, _ := newManifestHandlerForTest(t, "https://github.test", nil)
+// TestHandleCallback_MissingStateCookie verifies the callback rejects a request
+// with no CSRF state cookie (it is the authorization gate).
+func TestHandleCallback_MissingStateCookie(t *testing.T) {
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: "https://github.test"})
 
-	req := httptest.NewRequest(http.MethodGet, "/github/app/callback", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, callbackReq("validcode", "s1", "")) // no cookie
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
 
-// TestHandleCallback_ExchangeFailure checks that a bad GitHub response returns 502.
+// TestHandleCallback_StateMismatch verifies a query state that does not match
+// the cookie is rejected.
+func TestHandleCallback_StateMismatch(t *testing.T) {
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: "https://github.test"})
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, callbackReq("validcode", "query-state", "cookie-state"))
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+// TestHandleCallback_MissingCode verifies that, with a valid CSRF state, a
+// missing code returns 400.
+func TestHandleCallback_MissingCode(t *testing.T) {
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: "https://github.test"})
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, callbackReq("", "s1", "s1"))
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+// TestHandleCallback_ExchangeFailure verifies a bad GitHub response returns 502.
 func TestHandleCallback_ExchangeFailure(t *testing.T) {
-	// Fake GitHub that returns 422 for the conversion endpoint.
 	fakeGH := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 	}))
 	t.Cleanup(fakeGH.Close)
 
-	r, _ := newManifestHandlerForTest(t, fakeGH.URL, nil)
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: fakeGH.URL})
 
-	req := httptest.NewRequest(http.MethodGet, "/github/app/callback?code=badcode", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, callbackReq("badcode", "s1", "s1"))
 
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", w.Code)
 	}
 }
 
-// TestHandleCallback_Success checks the happy path: code exchange succeeds,
-// credentials are stored, and a setup token is shown in the response.
+// TestHandleCallback_Success verifies the happy path: a valid CSRF state and
+// code exchange stores credentials, calls mintFn, confirms registration, and
+// NEVER echoes the raw setup token.
 func TestHandleCallback_Success(t *testing.T) {
-	// Fake GitHub that returns valid credentials.
-	fakeGH := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/app-manifests/") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":             int64(1001),
-			"client_id":      "Iv1.abc",
-			"client_secret":  "secret-cs",
-			"webhook_secret": "secret-ws",
-			"pem":            "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
-		})
-	}))
-	t.Cleanup(fakeGH.Close)
+	fakeGH := fakeGitHubSuccess(t, 1001)
 
 	mintCalled := false
 	mintFn := func(installationID, _ string) (string, error) {
@@ -211,11 +377,10 @@ func TestHandleCallback_Success(t *testing.T) {
 		return "raw-setup-token", nil
 	}
 
-	r, _ := newManifestHandlerForTest(t, fakeGH.URL, mintFn)
+	r, _, st := newManifestHandlerForTest(t, manifestTestOpts{githubBase: fakeGH.URL, mintFn: mintFn})
 
-	req := httptest.NewRequest(http.MethodGet, "/github/app/callback?code=validcode", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, callbackReq("validcode", "s1", "s1"))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
@@ -224,42 +389,50 @@ func TestHandleCallback_Success(t *testing.T) {
 		t.Error("mintFn should have been called")
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "raw-setup-token") {
-		t.Error("response body should contain the raw setup token")
+	if !strings.Contains(body, "registered") {
+		t.Error("response should confirm registration")
 	}
-	// Verify the token is NOT prefixed with "token:" or logged indicators.
-	if strings.Contains(body, "token:") {
-		t.Error("response body should not leak token prefix")
+	// The raw setup token must NOT leak through the GitHub redirect chain.
+	if strings.Contains(body, "raw-setup-token") {
+		t.Error("response body must not echo the raw setup token")
+	}
+	// Credentials should have been persisted.
+	if _, ok, err := st.LoadAppCredentials(); err != nil || !ok {
+		t.Errorf("credentials not saved: ok=%v err=%v", ok, err)
 	}
 }
 
-// TestHandleCallback_SuccessNoMintFn checks that when no mintFn is set the
-// response is still 200.
+// TestHandleCallback_SuccessNoMintFn verifies success with no mintFn still
+// confirms registration.
 func TestHandleCallback_SuccessNoMintFn(t *testing.T) {
-	fakeGH := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":             int64(2002),
-			"client_id":      "Iv1.xyz",
-			"client_secret":  "cs",
-			"webhook_secret": "ws",
-			"pem":            "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
-		})
-	}))
-	t.Cleanup(fakeGH.Close)
+	fakeGH := fakeGitHubSuccess(t, 2002)
 
-	r, _ := newManifestHandlerForTest(t, fakeGH.URL, nil)
+	r, _, _ := newManifestHandlerForTest(t, manifestTestOpts{githubBase: fakeGH.URL})
 
-	req := httptest.NewRequest(http.MethodGet, "/github/app/callback?code=code2", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, callbackReq("code2", "s1", "s1"))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "registered") {
 		t.Error("response should confirm registration")
+	}
+}
+
+// TestHandleCallback_RefusesOverwrite verifies the callback refuses to overwrite
+// existing credentials when re-bootstrap is disabled, even with a valid state.
+func TestHandleCallback_RefusesOverwrite(t *testing.T) {
+	fakeGH := fakeGitHubSuccess(t, 3003)
+
+	r, _, st := newManifestHandlerForTest(t, manifestTestOpts{githubBase: fakeGH.URL})
+	seedCredentials(t, st)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, callbackReq("validcode", "s1", "s1"))
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body: %s", w.Code, w.Body.String())
 	}
 }
 

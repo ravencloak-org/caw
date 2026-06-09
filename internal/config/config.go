@@ -37,6 +37,15 @@ type Config struct {
 	// BaseURL is the publicly reachable URL of this Hub (CAW_BASE_URL).
 	// Used to construct the redirect_url in the manifest flow.
 	BaseURL string
+	// BootstrapToken is the operator secret that gates the GitHub App manifest
+	// routes (CAW_BOOTSTRAP_TOKEN). Without it the manifest flow is disabled.
+	// It is effectively single-use: once App credentials exist, the manifest
+	// routes refuse to overwrite them unless AllowRebootstrap is set.
+	BootstrapToken string
+	// AllowRebootstrap permits the manifest flow to overwrite credentials that
+	// already exist (ALLOW_REBOOTSTRAP). Off by default so a leaked bootstrap
+	// token cannot replace a live App's credentials.
+	AllowRebootstrap bool
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -54,6 +63,8 @@ func Load() Config {
 		AppClientID:         os.Getenv("CAW_APP_CLIENT_ID"),
 		AppClientSecret:     os.Getenv("CAW_APP_CLIENT_SECRET"),
 		BaseURL:             os.Getenv("CAW_BASE_URL"),
+		BootstrapToken:      os.Getenv("CAW_BOOTSTRAP_TOKEN"),
+		AllowRebootstrap:    getenvBool("ALLOW_REBOOTSTRAP"),
 	}
 }
 
@@ -62,4 +73,15 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// getenvBool reports whether the environment variable key is set to a truthy
+// value ("1" or "true", case-insensitively).
+func getenvBool(key string) bool {
+	switch os.Getenv(key) {
+	case "1", "true", "TRUE", "True":
+		return true
+	default:
+		return false
+	}
 }

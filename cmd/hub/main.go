@@ -62,17 +62,25 @@ func main() {
 	}
 	engine := settle.New(st, sseHub, settle.DefaultGrace, opts...)
 
-	// Build the GitHub App manifest handler (optional — requires CAW_BASE_URL).
+	// Build the GitHub App manifest handler. It is optional and gated: it
+	// requires both CAW_BASE_URL and the operator bootstrap secret
+	// (CAW_BOOTSTRAP_TOKEN). Without the bootstrap token the credential-minting
+	// routes stay disabled rather than running unauthenticated.
 	var mh *hub.ManifestHandler
-	if cfg.BaseURL != "" {
+	switch {
+	case cfg.BaseURL != "" && cfg.BootstrapToken != "":
 		mh, err = hub.NewManifestHandler(hub.ManifestConfig{
-			BaseURL: cfg.BaseURL,
-			Store:   st,
-			MintFn:  mintFn,
+			BaseURL:          cfg.BaseURL,
+			Store:            st,
+			MintFn:           mintFn,
+			BootstrapToken:   cfg.BootstrapToken,
+			AllowRebootstrap: cfg.AllowRebootstrap,
 		})
 		if err != nil {
 			log.Fatalf("manifest handler: %v", err)
 		}
+	case cfg.BaseURL != "":
+		log.Println("warning: CAW_BASE_URL set but CAW_BOOTSTRAP_TOKEN empty; GitHub App manifest flow disabled")
 	}
 
 	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, mintFn)
