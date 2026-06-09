@@ -40,6 +40,7 @@ func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte,
 	authMW := auth.Required(st)
 	r.GET("/pending", authMW, h.HandlePending)
 	r.GET("/sse/:owner/:repo/:number", authMW, sseHub.Handler(sseKey))
+	r.POST("/leases/:owner/:repo/:number", authMW, h.HandleAcquireLease)
 
 	return r
 }

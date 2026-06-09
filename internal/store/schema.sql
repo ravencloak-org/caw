@@ -70,6 +70,22 @@ CREATE TABLE IF NOT EXISTS installation_repos (
     PRIMARY KEY (installation_id, full_name)
 );
 
+-- Rebase leases: at most one holder per PR at any time (ADR-0005).
+-- UNIQUE(org, repo, pr_number) enforces the single-owner invariant.
+-- All timestamps are Unix epoch seconds (INTEGER) to stay portable to Postgres.
+CREATE TABLE IF NOT EXISTS leases (
+    org               TEXT    NOT NULL,
+    repo              TEXT    NOT NULL,
+    pr_number         INTEGER NOT NULL,
+    holder            TEXT    NOT NULL,          -- installation_id of current holder
+    expires_at        INTEGER NOT NULL,          -- Unix epoch; grant duration set by Hub
+    last_heartbeat_at INTEGER NOT NULL,          -- updated by holder; orphan detection uses this
+    acquired_at       INTEGER NOT NULL,
+    UNIQUE (org, repo, pr_number)
+);
+
+CREATE INDEX IF NOT EXISTS leases_expires ON leases (expires_at);
+
 -- GitHub App credentials persisted after the manifest conversion flow.
 -- Only one row ever exists (single-app deployment); enforced by CHECK (id = 1).
 CREATE TABLE IF NOT EXISTS app_credentials (
