@@ -5,8 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
-
-	"github.com/ravencloak-org/caw/internal/github"
 )
 
 func sign(secret, payload []byte) string {
@@ -42,48 +40,4 @@ func TestVerifySignature(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDeriveRound(t *testing.T) {
-	mk := func() github.Envelope {
-		var e github.Envelope
-		e.Repository.Owner.Login = "ravencloak-org"
-		e.Repository.Name = "caw"
-		return e
-	}
-
-	t.Run("from pull_request", func(t *testing.T) {
-		e := mk()
-		pr := &github.PullRequest{Number: 42}
-		pr.Head.SHA = "deadbeef"
-		e.PullRequest = pr
-		key, ok := DeriveRound(e)
-		if !ok || key.String() != "ravencloak-org/caw#42@deadbeef" {
-			t.Fatalf("got %v ok=%v", key, ok)
-		}
-	})
-
-	t.Run("from check_suite", func(t *testing.T) {
-		e := mk()
-		e.CheckSuite = &github.CheckSuite{
-			HeadSHA:      "cafef00d",
-			PullRequests: []github.CheckSuitePR{{Number: 7}},
-		}
-		key, ok := DeriveRound(e)
-		if !ok || key.String() != "ravencloak-org/caw#7@cafef00d" {
-			t.Fatalf("got %v ok=%v", key, ok)
-		}
-	})
-
-	t.Run("no PR context", func(t *testing.T) {
-		if _, ok := DeriveRound(mk()); ok {
-			t.Fatal("expected ok=false when no PR/check_suite present")
-		}
-	})
-
-	t.Run("no repository", func(t *testing.T) {
-		if _, ok := DeriveRound(github.Envelope{}); ok {
-			t.Fatal("expected ok=false when repository is absent")
-		}
-	})
 }

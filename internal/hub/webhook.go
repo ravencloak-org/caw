@@ -52,7 +52,13 @@ func VerifySignature(secret, payload []byte, sigHeader string) bool {
 	return hmac.Equal(want, mac.Sum(nil))
 }
 
-// HandleWebhook is the POST /webhooks/github handler: verify, dedupe, then ingest.
+// HandleWebhook is the POST /webhooks/github handler: verify the signature,
+// dedupe by delivery id, ingest, and only THEN record the delivery as processed.
+//
+// Recording after ingest (not before) is deliberate: if ingest fails we return
+// 5xx with the delivery un-recorded, so GitHub's redelivery of the same id is
+// reprocessed rather than silently dropped as a "duplicate". ingest is
+// idempotent (upserts), so a redelivery race is harmless.
 func (h *Hub) HandleWebhook(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBody))
 	if err != nil {
@@ -66,14 +72,15 @@ func (h *Hub) HandleWebhook(c *gin.Context) {
 	}
 
 	event := c.GetHeader("X-GitHub-Event")
-	if delivery := c.GetHeader("X-GitHub-Delivery"); delivery != "" {
-		isNew, err := h.store.SeenDelivery(delivery, event)
+	delivery := c.GetHeader("X-GitHub-Delivery")
+	if delivery != "" {
+		seen, err := h.store.HasDelivery(delivery)
 		if err != nil {
-			log.Printf("dedupe delivery %s: %v", delivery, err)
+			log.Printf("dedupe check %s: %v", delivery, err)
 			c.String(http.StatusInternalServerError, "dedupe")
 			return
 		}
-		if !isNew {
+		if seen {
 			c.String(http.StatusOK, "duplicate")
 			return
 		}
@@ -89,6 +96,13 @@ func (h *Hub) HandleWebhook(c *gin.Context) {
 		log.Printf("ingest %s: %v", event, err)
 		c.String(http.StatusInternalServerError, "ingest")
 		return
+	}
+
+	if delivery != "" {
+		if _, err := h.store.SeenDelivery(delivery, event); err != nil {
+			// Non-fatal: a missed mark just risks one idempotent reprocess.
+			log.Printf("record delivery %s: %v", delivery, err)
+		}
 	}
 	c.String(http.StatusAccepted, "accepted")
 }

@@ -151,6 +151,22 @@ func TestStoreErrorsAfterClose(t *testing.T) {
 	if _, err := s.ListPending(); err == nil {
 		t.Error("ListPending should error after close")
 	}
+	if _, err := s.HasDelivery("d"); err == nil {
+		t.Error("HasDelivery should error after close")
+	}
+}
+
+func TestHasDelivery(t *testing.T) {
+	s := newTestStore(t)
+	if seen, err := s.HasDelivery("d1"); err != nil || seen {
+		t.Fatalf("HasDelivery before = (%v, %v), want (false, nil)", seen, err)
+	}
+	if _, err := s.SeenDelivery("d1", "push"); err != nil {
+		t.Fatal(err)
+	}
+	if seen, err := s.HasDelivery("d1"); err != nil || !seen {
+		t.Fatalf("HasDelivery after = (%v, %v), want (true, nil)", seen, err)
+	}
 }
 
 func TestSignalsAddReplaceAndList(t *testing.T) {

@@ -37,8 +37,19 @@ func Open(path string) (*Store, error) {
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
-// SeenDelivery records a GitHub delivery id and reports whether it is new.
-// It returns true the first time an id is seen, false for duplicates.
+// HasDelivery reports whether a delivery id has already been recorded. Used as
+// the pre-ingest dedupe check, so a delivery is only suppressed once it has been
+// successfully processed (see SeenDelivery).
+func (s *Store) HasDelivery(id string) (bool, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM deliveries WHERE id = ?`, id).Scan(&n); err != nil {
+		return false, fmt.Errorf("has delivery: %w", err)
+	}
+	return n > 0, nil
+}
+
+// SeenDelivery records a GitHub delivery id (the post-ingest "processed" mark)
+// and reports whether the row was newly inserted. Idempotent via INSERT OR IGNORE.
 func (s *Store) SeenDelivery(id, event string) (bool, error) {
 	res, err := s.db.Exec(
 		`INSERT OR IGNORE INTO deliveries (id, event, received_at) VALUES (?, ?, ?)`,
