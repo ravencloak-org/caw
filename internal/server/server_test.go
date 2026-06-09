@@ -53,7 +53,7 @@ func newTestServer(t *testing.T, grace time.Duration) (*httptest.Server, string)
 
 	sseHub := sse.New()
 	engine := settle.New(st, sseHub, grace)
-	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret)))
+	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil))
 	t.Cleanup(ts.Close)
 	return ts, raw
 }

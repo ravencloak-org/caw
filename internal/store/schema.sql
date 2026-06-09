@@ -55,3 +55,29 @@ CREATE TABLE IF NOT EXISTS tokens (
     org             TEXT NOT NULL DEFAULT '',
     created_at      INTEGER NOT NULL
 );
+
+-- GitHub App installations. One row per installation_id.
+CREATE TABLE IF NOT EXISTS installations (
+    installation_id TEXT PRIMARY KEY,
+    account_login   TEXT NOT NULL,
+    created_at      INTEGER NOT NULL
+);
+
+-- Repos associated with each installation.
+CREATE TABLE IF NOT EXISTS installation_repos (
+    installation_id TEXT NOT NULL,
+    full_name       TEXT NOT NULL,           -- "owner/repo"
+    PRIMARY KEY (installation_id, full_name)
+);
+
+-- GitHub App credentials persisted after the manifest conversion flow.
+-- Only one row ever exists (single-app deployment); enforced by CHECK (id = 1).
+CREATE TABLE IF NOT EXISTS app_credentials (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    app_id         TEXT NOT NULL,
+    client_id      TEXT NOT NULL,
+    client_secret  TEXT NOT NULL,
+    webhook_secret TEXT NOT NULL,
+    pem            TEXT NOT NULL,
+    created_at     INTEGER NOT NULL
+);

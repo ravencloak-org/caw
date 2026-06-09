@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -28,12 +29,20 @@ const maxBody = 25 << 20
 type Hub struct {
 	store   *store.Store
 	secret  []byte
-	settler *settle.Engine // may be nil (e.g. in unit tests of pure ingest)
+	settler *settle.Engine                                   // may be nil (e.g. in unit tests of pure ingest)
+	mintFn  func(installationID, org string) (string, error) // nil → no auto-minting
 }
 
 // New constructs a Hub. settler may be nil, in which case settles are not scheduled.
 func New(st *store.Store, secret []byte, settler *settle.Engine) *Hub {
 	return &Hub{store: st, secret: secret, settler: settler}
+}
+
+// WithMintFunc sets the function called to mint a Hub token when an
+// installation "created" event is received. Returns Hub for chaining.
+func (h *Hub) WithMintFunc(fn func(installationID, org string) (string, error)) *Hub {
+	h.mintFn = fn
+	return h
 }
 
 // VerifySignature reports whether sigHeader ("sha256=<hex>") is a valid
@@ -112,6 +121,14 @@ var passingConclusions = map[string]bool{"success": true, "neutral": true, "skip
 
 // ingest records the Round, extracts any signal, and arms the settle timer.
 func (h *Hub) ingest(event string, env github.Envelope) error {
+	// Installation events carry no repository context; handle them first.
+	switch event {
+	case "installation":
+		return h.handleInstallation(env)
+	case "installation_repositories":
+		return h.handleInstallationRepositories(env)
+	}
+
 	owner := env.Repository.Owner.Login
 	repo := env.Repository.Name
 	if owner == "" || repo == "" {
@@ -177,6 +194,59 @@ func (h *Hub) ingest(event string, env github.Envelope) error {
 		}
 		return h.comment(owner, repo, env.Issue.Number, sha,
 			env.Sender.Login, fmt.Sprintf("ic-%d", env.Comment.ID), env.Comment.Body)
+	}
+	return nil
+}
+
+// handleInstallation processes GitHub App installation created/deleted events.
+func (h *Hub) handleInstallation(env github.Envelope) error {
+	if env.Installation == nil {
+		return nil
+	}
+	installID := strconv.FormatInt(env.Installation.ID, 10)
+	org := env.Installation.Account.Login
+
+	switch env.Action {
+	case "created":
+		if err := h.store.UpsertInstallation(installID, org); err != nil {
+			return fmt.Errorf("handleInstallation upsert: %w", err)
+		}
+		for _, r := range env.Repositories {
+			if err := h.store.AddInstallationRepo(installID, r.FullName); err != nil {
+				return fmt.Errorf("handleInstallation add repo: %w", err)
+			}
+		}
+		if h.mintFn != nil {
+			if _, err := h.mintFn(installID, org); err != nil {
+				// Non-fatal: log but do not fail the webhook; token can be minted later.
+				log.Printf("mint token for installation %s: %v", installID, err)
+			}
+		}
+
+	case "deleted":
+		if err := h.store.DeleteInstallation(installID); err != nil {
+			return fmt.Errorf("handleInstallation delete: %w", err)
+		}
+	}
+	return nil
+}
+
+// handleInstallationRepositories processes repositories added/removed events.
+func (h *Hub) handleInstallationRepositories(env github.Envelope) error {
+	if env.Installation == nil {
+		return nil
+	}
+	installID := strconv.FormatInt(env.Installation.ID, 10)
+
+	for _, r := range env.RepositoriesAdded {
+		if err := h.store.AddInstallationRepo(installID, r.FullName); err != nil {
+			return fmt.Errorf("handleInstallationRepositories add: %w", err)
+		}
+	}
+	for _, r := range env.RepositoriesRemoved {
+		if err := h.store.RemoveInstallationRepo(installID, r.FullName); err != nil {
+			return fmt.Errorf("handleInstallationRepositories remove: %w", err)
+		}
 	}
 	return nil
 }
