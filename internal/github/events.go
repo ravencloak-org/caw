@@ -3,8 +3,9 @@ package github
 
 // Repository identifies the repo an event belongs to.
 type Repository struct {
-	Name  string `json:"name"`
-	Owner struct {
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Owner    struct {
 		Login string `json:"login"`
 	} `json:"owner"`
 }
@@ -53,18 +54,34 @@ type Issue struct {
 	Number int `json:"number"`
 }
 
+// Installation is the GitHub App installation object present in installation
+// and installation_repositories webhook payloads.
+type Installation struct {
+	ID      int64 `json:"id"`
+	Account struct {
+		Login string `json:"login"`
+	} `json:"account"`
+}
+
 // Envelope captures the fields required to bucket a webhook into a Round and to
 // extract signals. Optional pointers reflect which payloads carry which objects.
 type Envelope struct {
-	Action      string       `json:"action"`
-	Number      int          `json:"number"`
-	Repository  Repository   `json:"repository"`
-	PullRequest *PullRequest `json:"pull_request"`
-	CheckSuite  *CheckSuite  `json:"check_suite"`
-	Comment     *Comment     `json:"comment"`
-	Review      *Review      `json:"review"`
-	Issue       *Issue       `json:"issue"`
-	Sender      struct {
+	Action       string        `json:"action"`
+	Number       int           `json:"number"`
+	Repository   Repository    `json:"repository"`
+	PullRequest  *PullRequest  `json:"pull_request"`
+	CheckSuite   *CheckSuite   `json:"check_suite"`
+	Comment      *Comment      `json:"comment"`
+	Review       *Review       `json:"review"`
+	Issue        *Issue        `json:"issue"`
+	Installation *Installation `json:"installation"`
+	// Repositories is set on installation_repositories events.
+	Repositories []Repository `json:"repositories"`
+	// RepositoriesAdded and RepositoriesRemoved are set on
+	// installation_repositories events for the delta.
+	RepositoriesAdded   []Repository `json:"repositories_added"`
+	RepositoriesRemoved []Repository `json:"repositories_removed"`
+	Sender              struct {
 		Login string `json:"login"`
 	} `json:"sender"`
 }

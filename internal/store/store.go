@@ -250,3 +250,110 @@ func (s *Store) VerifyToken(tokenHash string) (installationID string, ok bool, e
 		return installationID, true, nil
 	}
 }
+
+// UpsertInstallation inserts or replaces a GitHub App installation record.
+func (s *Store) UpsertInstallation(installationID, accountLogin string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO installations (installation_id, account_login, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT(installation_id) DO UPDATE SET account_login = excluded.account_login`,
+		installationID, accountLogin, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert installation: %w", err)
+	}
+	return nil
+}
+
+// DeleteInstallation removes an installation and all its repo associations.
+func (s *Store) DeleteInstallation(installationID string) error {
+	if _, err := s.db.Exec(
+		`DELETE FROM installation_repos WHERE installation_id = ?`, installationID,
+	); err != nil {
+		return fmt.Errorf("delete installation repos: %w", err)
+	}
+	if _, err := s.db.Exec(
+		`DELETE FROM installations WHERE installation_id = ?`, installationID,
+	); err != nil {
+		return fmt.Errorf("delete installation: %w", err)
+	}
+	return nil
+}
+
+// AddInstallationRepo associates a repository with an installation.
+func (s *Store) AddInstallationRepo(installationID, fullName string) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO installation_repos (installation_id, full_name) VALUES (?, ?)`,
+		installationID, fullName,
+	)
+	if err != nil {
+		return fmt.Errorf("add installation repo: %w", err)
+	}
+	return nil
+}
+
+// RemoveInstallationRepo disassociates a repository from an installation.
+func (s *Store) RemoveInstallationRepo(installationID, fullName string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM installation_repos WHERE installation_id = ? AND full_name = ?`,
+		installationID, fullName,
+	)
+	if err != nil {
+		return fmt.Errorf("remove installation repo: %w", err)
+	}
+	return nil
+}
+
+// RepoInInstallation reports whether a repo is associated with an installation.
+func (s *Store) RepoInInstallation(installationID, fullName string) (bool, error) {
+	var n int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(1) FROM installation_repos WHERE installation_id = ? AND full_name = ?`,
+		installationID, fullName,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("repo in installation: %w", err)
+	}
+	return n > 0, nil
+}
+
+// AppCredentials holds the persisted GitHub App credentials (manifest flow).
+type AppCredentials struct {
+	AppID         string
+	ClientID      string
+	ClientSecret  string
+	WebhookSecret string
+	PEM           string
+}
+
+// SaveAppCredentials persists (or replaces) the single set of App credentials.
+func (s *Store) SaveAppCredentials(c AppCredentials) error {
+	_, err := s.db.Exec(
+		`INSERT INTO app_credentials (id, app_id, client_id, client_secret, webhook_secret, pem, created_at)
+		 VALUES (1, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		     app_id = excluded.app_id, client_id = excluded.client_id,
+		     client_secret = excluded.client_secret, webhook_secret = excluded.webhook_secret,
+		     pem = excluded.pem, created_at = excluded.created_at`,
+		c.AppID, c.ClientID, c.ClientSecret, c.WebhookSecret, c.PEM, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("save app credentials: %w", err)
+	}
+	return nil
+}
+
+// LoadAppCredentials retrieves the persisted App credentials.
+// ok is false when none have been saved yet.
+func (s *Store) LoadAppCredentials() (AppCredentials, bool, error) {
+	var c AppCredentials
+	err := s.db.QueryRow(
+		`SELECT app_id, client_id, client_secret, webhook_secret, pem FROM app_credentials WHERE id = 1`,
+	).Scan(&c.AppID, &c.ClientID, &c.ClientSecret, &c.WebhookSecret, &c.PEM)
+	switch {
+	case err == sql.ErrNoRows:
+		return AppCredentials{}, false, nil
+	case err != nil:
+		return AppCredentials{}, false, fmt.Errorf("load app credentials: %w", err)
+	default:
+		return c, true, nil
+	}
+}

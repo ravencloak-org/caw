@@ -17,13 +17,25 @@ import (
 // New builds the Gin engine with all routes wired. The SSE and pending routes
 // are gated by installation-token auth (ADR-0003); the SSE route is registered
 // without buffering middleware so the held connection streams (ADR-0001).
-func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte) *gin.Engine {
+//
+// mh is optional: when non-nil the GitHub App Manifest flow routes are registered.
+// mintFn is optional: when non-nil it is passed to the Hub so that installation
+// "created" webhook events automatically mint a Hub token.
+func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, mintFn func(installationID, org string) (string, error)) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
 	h := hub.New(st, secret, engine)
+	if mintFn != nil {
+		h.WithMintFunc(mintFn)
+	}
 	r.POST("/webhooks/github", h.HandleWebhook)
 	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	if mh != nil {
+		r.GET("/github/app/manifest", mh.HandleManifest)
+		r.GET("/github/app/callback", mh.HandleCallback)
+	}
 
 	authMW := auth.Required(st)
 	r.GET("/pending", authMW, h.HandlePending)
