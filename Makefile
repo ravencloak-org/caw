@@ -1,7 +1,12 @@
-.PHONY: build test lint run tidy clean
+.PHONY: build hub watcher test lint run tidy clean
 
-build:
+build: hub watcher
+
+hub:
 	CGO_ENABLED=0 go build -o bin/hub ./cmd/hub
+
+watcher:
+	CGO_ENABLED=0 go build -o bin/watcher ./cmd/watcher
 
 test:
 	go test -race ./...

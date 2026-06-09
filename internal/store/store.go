@@ -357,3 +357,83 @@ func (s *Store) LoadAppCredentials() (AppCredentials, bool, error) {
 		return c, true, nil
 	}
 }
+
+// Lease represents the single-owner rebase-lease for a PR (ADR-0005).
+// Only one holder may hold a lease for a given (Org, Repo, PRNumber) at any time.
+type Lease struct {
+	Org             string
+	Repo            string
+	PRNumber        int
+	Holder          string // installation_id of current holder
+	ExpiresAt       int64  // Unix epoch seconds
+	LastHeartbeatAt int64  // Unix epoch seconds
+	AcquiredAt      int64  // Unix epoch seconds
+}
+
+// AcquireLeaseResult reports the outcome of an AcquireLease call.
+type AcquireLeaseResult struct {
+	Granted bool
+	Lease   Lease
+}
+
+// AcquireLease attempts to grant holder a lease for the given PR.
+// If the PR already has a non-expired lease held by a different holder the
+// grant is denied and the current holder's lease is returned with Granted=false.
+// If the PR has no lease, or the existing lease is expired, a new lease is
+// written (replacing any stale row) and Granted=true is returned.
+// leaseDuration is added to now to compute ExpiresAt.
+func (s *Store) AcquireLease(org, repo string, prNumber int, holder string, leaseDuration int64) (AcquireLeaseResult, error) {
+	now := time.Now().Unix()
+	expires := now + leaseDuration
+
+	// Try an insert first (happy path: no current lease).
+	_, err := s.db.Exec(
+		`INSERT INTO leases (org, repo, pr_number, holder, expires_at, last_heartbeat_at, acquired_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(org, repo, pr_number) DO UPDATE SET
+		     holder            = excluded.holder,
+		     expires_at        = excluded.expires_at,
+		     last_heartbeat_at = excluded.last_heartbeat_at,
+		     acquired_at       = excluded.acquired_at
+		 WHERE leases.expires_at < ?`,
+		org, repo, prNumber, holder, expires, now, now,
+		now, // WHERE clause: only replace if expired
+	)
+	if err != nil {
+		return AcquireLeaseResult{}, fmt.Errorf("acquire lease: %w", err)
+	}
+
+	// Read back the current row to determine who actually holds it.
+	l, ok, err := s.GetLease(org, repo, prNumber)
+	if err != nil {
+		return AcquireLeaseResult{}, err
+	}
+	if !ok {
+		// Shouldn't happen — we just wrote a row.
+		return AcquireLeaseResult{}, fmt.Errorf("acquire lease: row disappeared after write")
+	}
+
+	return AcquireLeaseResult{
+		Granted: l.Holder == holder && l.ExpiresAt == expires,
+		Lease:   l,
+	}, nil
+}
+
+// GetLease retrieves the current lease for the given PR.
+// ok is false when no lease row exists.
+func (s *Store) GetLease(org, repo string, prNumber int) (Lease, bool, error) {
+	var l Lease
+	err := s.db.QueryRow(
+		`SELECT org, repo, pr_number, holder, expires_at, last_heartbeat_at, acquired_at
+		 FROM leases WHERE org = ? AND repo = ? AND pr_number = ?`,
+		org, repo, prNumber,
+	).Scan(&l.Org, &l.Repo, &l.PRNumber, &l.Holder, &l.ExpiresAt, &l.LastHeartbeatAt, &l.AcquiredAt)
+	switch {
+	case err == sql.ErrNoRows:
+		return Lease{}, false, nil
+	case err != nil:
+		return Lease{}, false, fmt.Errorf("get lease: %w", err)
+	default:
+		return l, true, nil
+	}
+}
