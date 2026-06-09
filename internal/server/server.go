@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	otelgin "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/ravencloak-org/caw/internal/auth"
 	"github.com/ravencloak-org/caw/internal/hub"
@@ -23,7 +24,7 @@ import (
 // "created" webhook events automatically mint a Hub token.
 func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, mintFn func(installationID, org string) (string, error)) *gin.Engine {
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
 
 	h := hub.New(st, secret, engine)
 	if mintFn != nil {

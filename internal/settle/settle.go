@@ -5,11 +5,16 @@
 package settle
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 
 	"github.com/ravencloak-org/caw/internal/compile"
 	"github.com/ravencloak-org/caw/internal/store"
@@ -124,6 +129,18 @@ func (e *Engine) fire(rk string) {
 	owner, repo, number, sha := rs.owner, rs.repo, rs.number, rs.sha
 	e.mu.Unlock()
 
+	tracer := otel.Tracer("caw-hub/settle")
+	ctx, span := tracer.Start(context.Background(), "settle.fire")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("settle.round_key", rk),
+		attribute.Int("settle.seq", seq),
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.Int("github.pr_number", number),
+		attribute.String("github.sha", sha),
+	)
+
 	// The one poll in the system: re-verify mergeability at settle time and fold
 	// it in as a signal (ADR-0004). A stable ExternalID replaces the prior poll.
 	if e.poller != nil {
@@ -139,17 +156,23 @@ func (e *Engine) fire(rk string) {
 
 	signals, err := e.store.SignalsForRound(owner, repo, number, sha)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "load signals")
 		log.Printf("settle %s: load signals: %v", rk, err)
 		return
 	}
 	summary := compile.Compile(rk, seq, signals)
 	msg, err := json.Marshal(summary)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal")
 		log.Printf("settle %s: marshal: %v", rk, err)
 		return
 	}
 
-	if e.pub.Publish(PRKey(owner, repo, number), msg) == 0 {
+	fanOut := e.pub.Publish(PRKey(owner, repo, number), msg)
+	span.SetAttributes(attribute.Int("settle.fan_out", fanOut))
+	if fanOut == 0 {
 		// Orphaned: no live Session. Persist as pending, latest per signal-type.
 		for _, g := range summary.Groups {
 			if err := e.store.UpsertPending(store.PendingItem{
@@ -160,4 +183,5 @@ func (e *Engine) fire(rk string) {
 			}
 		}
 	}
+	_ = ctx
 }

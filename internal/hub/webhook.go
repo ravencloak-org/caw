@@ -4,6 +4,7 @@
 package hub
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +17,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 
 	"github.com/ravencloak-org/caw/internal/github"
 	"github.com/ravencloak-org/caw/internal/settle"
@@ -69,27 +73,43 @@ func VerifySignature(secret, payload []byte, sigHeader string) bool {
 // reprocessed rather than silently dropped as a "duplicate". ingest is
 // idempotent (upserts), so a redelivery race is harmless.
 func (h *Hub) HandleWebhook(c *gin.Context) {
+	tracer := otel.Tracer("caw-hub/webhook")
+	ctx, span := tracer.Start(c.Request.Context(), "webhook.handle")
+	defer span.End()
+
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBody))
 	if err != nil {
+		span.SetStatus(codes.Error, "read body")
 		c.String(http.StatusBadRequest, "read body")
 		return
 	}
 
-	if len(h.secret) == 0 || !VerifySignature(h.secret, body, c.GetHeader("X-Hub-Signature-256")) {
+	sigOK := len(h.secret) > 0 && VerifySignature(h.secret, body, c.GetHeader("X-Hub-Signature-256"))
+	span.SetAttributes(attribute.Bool("webhook.sig_ok", sigOK))
+	if !sigOK {
+		span.SetStatus(codes.Error, "invalid signature")
 		c.String(http.StatusUnauthorized, "invalid signature")
 		return
 	}
 
 	event := c.GetHeader("X-GitHub-Event")
 	delivery := c.GetHeader("X-GitHub-Delivery")
+	span.SetAttributes(
+		attribute.String("webhook.event", event),
+		attribute.String("webhook.delivery", delivery),
+	)
+
 	if delivery != "" {
 		seen, err := h.store.HasDelivery(delivery)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "dedupe check")
 			log.Printf("dedupe check %s: %v", delivery, err)
 			c.String(http.StatusInternalServerError, "dedupe")
 			return
 		}
 		if seen {
+			span.SetAttributes(attribute.Bool("webhook.duplicate", true))
 			c.String(http.StatusOK, "duplicate")
 			return
 		}
@@ -97,11 +117,15 @@ func (h *Hub) HandleWebhook(c *gin.Context) {
 
 	var env github.Envelope
 	if err := json.Unmarshal(body, &env); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "parse payload")
 		c.String(http.StatusBadRequest, "parse payload")
 		return
 	}
 
-	if err := h.ingest(event, env); err != nil {
+	if err := h.ingest(ctx, event, env); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "ingest")
 		log.Printf("ingest %s: %v", event, err)
 		c.String(http.StatusInternalServerError, "ingest")
 		return
@@ -120,7 +144,11 @@ func (h *Hub) HandleWebhook(c *gin.Context) {
 var passingConclusions = map[string]bool{"success": true, "neutral": true, "skipped": true}
 
 // ingest records the Round, extracts any signal, and arms the settle timer.
-func (h *Hub) ingest(event string, env github.Envelope) error {
+func (h *Hub) ingest(ctx context.Context, event string, env github.Envelope) error {
+	tracer := otel.Tracer("caw-hub/webhook")
+	ctx, span := tracer.Start(ctx, "webhook.ingest")
+	defer span.End()
+	span.SetAttributes(attribute.String("webhook.event", event))
 	// Installation events carry no repository context; handle them first.
 	switch event {
 	case "installation":
@@ -134,6 +162,11 @@ func (h *Hub) ingest(event string, env github.Envelope) error {
 	if owner == "" || repo == "" {
 		return nil
 	}
+	span.SetAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+	)
+	_ = ctx // ctx is available for future child spans
 
 	switch event {
 	case "check_suite":

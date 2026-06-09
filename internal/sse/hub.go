@@ -3,7 +3,42 @@
 // listener receives every summary (ADR-0007).
 package sse
 
-import "sync"
+import (
+	"context"
+	"sync"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
+)
+
+// noopCtx is a shared background context for metric recording calls inside
+// Publish, which has no caller-supplied context.
+var noopCtx = context.Background()
+
+// fanOutCounter is the OTel metric used to record Publish fan-out sizes.
+// It is initialized lazily on first use; if the MeterProvider is the global
+// no-op (test / dev / no endpoint configured) the counter is a no-op too.
+var (
+	fanOutCounter     metric.Int64Counter
+	fanOutCounterOnce sync.Once
+)
+
+func getFanOutCounter() metric.Int64Counter {
+	fanOutCounterOnce.Do(func() {
+		var err error
+		fanOutCounter, err = otel.Meter("caw-hub/sse").Int64Counter(
+			"sse.fan_out",
+			metric.WithDescription("Number of subscribers that received a published message"),
+		)
+		if err != nil {
+			// Fallback to a no-op counter so Publish never panics.
+			fanOutCounter, _ = noop.NewMeterProvider().Meter("").Int64Counter("sse.fan_out")
+		}
+	})
+	return fanOutCounter
+}
 
 // subBuffer is the per-subscriber channel depth. Summaries are infrequent, so a
 // small buffer absorbs brief reader stalls without blocking the publisher.
@@ -70,6 +105,7 @@ func (h *Hub) Publish(key string, msg []byte) int {
 		default:
 		}
 	}
+	getFanOutCounter().Add(noopCtx, int64(delivered), metric.WithAttributes(attribute.String("sse.key", key)))
 	return delivered
 }
 

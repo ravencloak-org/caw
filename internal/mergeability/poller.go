@@ -6,6 +6,10 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/ravencloak-org/caw/internal/ghclient"
 	"github.com/ravencloak-org/caw/internal/store"
 )
@@ -27,11 +31,27 @@ func (p *Poller) Mergeability(owner, repo string, number int, sha string) (store
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 
+	tracer := otel.Tracer("caw-hub/mergeability")
+	ctx, span := tracer.Start(ctx, "mergeability.poll")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.Int("github.pr_number", number),
+		attribute.String("github.sha", sha),
+	)
+
 	ps, err := p.client.PullMergeability(ctx, owner, repo, number)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "poll failed")
 		return store.Signal{}, false, err
 	}
 	severity, body := classify(ps)
+	span.SetAttributes(
+		attribute.String("mergeability.state", ps.MergeableState),
+		attribute.String("mergeability.severity", severity),
+	)
 	return store.Signal{
 		Owner: owner, Repo: repo, Number: number, SHA: sha,
 		SignalType: "mergeability", Source: "poll", ExternalID: "mergeability",
