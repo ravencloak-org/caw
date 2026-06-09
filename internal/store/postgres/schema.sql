@@ -4,7 +4,7 @@
 -- Deduplication of GitHub webhook deliveries by X-GitHub-Delivery id.
 CREATE TABLE IF NOT EXISTS deliveries (
     id                    TEXT NOT NULL,
-    event                 TEXT NOT NULL,
+    "event"               TEXT NOT NULL,
     received_at           BIGINT NOT NULL,
     PRIMARY KEY (id)
 );
@@ -12,33 +12,33 @@ CREATE TABLE IF NOT EXISTS deliveries (
 -- A Round is the lifecycle of a single PR head SHA (owner/repo#number @ sha).
 -- A new head SHA is a new Round; see ADR-0004.
 CREATE TABLE IF NOT EXISTS rounds (
-    owner                 TEXT NOT NULL,
+    "owner"               TEXT NOT NULL,
     repo                  TEXT NOT NULL,
     number                INTEGER NOT NULL,
     sha                   TEXT NOT NULL,
     updated_at            BIGINT NOT NULL,
-    PRIMARY KEY (owner, repo, number, sha)
+    PRIMARY KEY ("owner", repo, number, sha)
 );
 
 -- Latest-state pending store: at most one row per PR per signal-type, the
 -- newest summary wins (ADR-0006). Nothing here is garbage-collected; a newer
 -- same-type event overwrites the row.
 CREATE TABLE IF NOT EXISTS pending (
-    owner                 TEXT NOT NULL,
+    "owner"               TEXT NOT NULL,
     repo                  TEXT NOT NULL,
     number                INTEGER NOT NULL,
     signal_type           TEXT NOT NULL,
     sha                   TEXT NOT NULL,
     pr_state              TEXT NOT NULL,
-    summary               TEXT NOT NULL,
+    "summary"             TEXT NOT NULL,
     updated_at            BIGINT NOT NULL,
-    PRIMARY KEY (owner, repo, number, signal_type)
+    PRIMARY KEY ("owner", repo, number, signal_type)
 );
 
 -- Raw signals observed for a Round, compiled into a summary at settle time.
 -- Keyed by their natural identity so a re-delivered signal replaces, not dupes.
 CREATE TABLE IF NOT EXISTS signals (
-    owner                 TEXT NOT NULL,
+    "owner"               TEXT NOT NULL,
     repo                  TEXT NOT NULL,
     number                INTEGER NOT NULL,
     sha                   TEXT NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS signals (
     severity              TEXT NOT NULL DEFAULT '',
     body                  TEXT NOT NULL DEFAULT '',
     updated_at            BIGINT NOT NULL,
-    PRIMARY KEY (owner, repo, number, sha, signal_type, source, external_id)
+    PRIMARY KEY ("owner", repo, number, sha, signal_type, source, external_id)
 );
 
 -- Hub-minted installation tokens for SSE / get_pending auth (ADR-0003).
@@ -108,6 +108,4 @@ CREATE TABLE IF NOT EXISTS app_credentials (
 
 -- Partial index for efficient expired-lease sweeps (Postgres only).
 -- SQLite uses the plain leases_expires index defined above.
-CREATE INDEX IF NOT EXISTS leases_expires_partial
-    ON leases (expires_at)
-    WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS leases_expires_partial ON leases (expires_at) WHERE expires_at IS NOT NULL;

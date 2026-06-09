@@ -29,16 +29,32 @@ jobs:
   schema-drift:
     name: Schema drift gate
     runs-on: ubuntu-latest
+    # Dolt's `schema export` formatting can change between releases, so the
+    # version is pinned. It MUST match the version used to generate the
+    # committed dialect files (see db/README.md). Bumping this requires
+    # rerunning `make schema` with the same version and committing the result.
+    env:
+      DOLT_VERSION: "2.1.2"
     steps:
       - uses: actions/checkout@v6
         with:
           # Full history so dolt log works inside the db/ subdirectory
           fetch-depth: 0
 
-      - name: Install Dolt
+      - name: Install Dolt ${{ env.DOLT_VERSION }}
+        # The versioned install.sh installs to /usr/local/bin (already on PATH)
+        # and must run as root. The script pins its own binary to v$DOLT_VERSION.
         run: |
-          curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
-          echo "$HOME/.dolt/bin" >> "$GITHUB_PATH"
+          curl -L "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
+
+      - name: Verify pinned Dolt version
+        run: |
+          installed="$(dolt version | awk '/dolt version/ {print $3}')"
+          echo "Installed dolt: $installed (expected $DOLT_VERSION)"
+          test "$installed" = "$DOLT_VERSION" || {
+            echo "ERROR: dolt version mismatch — drift gate would be unreliable."
+            exit 1
+          }
 
       - uses: actions/setup-python@v5
         with:

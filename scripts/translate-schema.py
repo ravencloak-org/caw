@@ -17,6 +17,26 @@ HEADER = """\
 -- Source of truth: db/ (Dolt). Regenerate with `make schema`.\
 """
 
+# Identifiers that are keywords in the Postgres dialect (per SQLFluff's RF04
+# rule, references.keywords). These must be double-quoted in the generated
+# Postgres DDL so they are treated as ordinary identifiers, not keywords.
+# Lower-cased for case-insensitive comparison; only the columns actually used
+# in caw's schema are listed.
+PG_RESERVED_IDENTIFIERS = {"event", "owner", "summary"}
+
+
+def pg_quote_ident(name: str) -> str:
+    """Double-quote a Postgres identifier if it collides with a keyword."""
+    if name.lower() in PG_RESERVED_IDENTIFIERS:
+        return f'"{name}"'
+    return name
+
+
+def pg_quote_col_list(cols: str) -> str:
+    """Quote any keyword identifiers inside a comma-separated column list."""
+    parts = [p.strip() for p in cols.split(",")]
+    return ", ".join(pg_quote_ident(p) for p in parts)
+
 # Table comments that describe each table — kept identical to the original schema.sql
 TABLE_COMMENTS = {
     "deliveries": "-- Deduplication of GitHub webhook deliveries by X-GitHub-Delivery id.",
@@ -305,7 +325,8 @@ def format_postgres_table(tdef: TableDef) -> str:
     for col_name, col_def in tdef.columns:
         translated = translate_col_def(col_def, postgres_type)
         comment = col_comments.get(col_name, "")
-        col_line = f"    {col_name:<22}{translated}"
+        ident = pg_quote_ident(col_name)
+        col_line = f"    {ident:<22}{translated}"
         if comment:
             entries.append((col_line, comment))
         else:
@@ -313,11 +334,14 @@ def format_postgres_table(tdef: TableDef) -> str:
 
     for kind, val in tdef.constraints:
         if kind == "PRIMARY KEY":
-            entries.append(f"    {val}")
+            # val looks like 'PRIMARY KEY (owner, repo, ...)'; quote keyword cols
+            m = re.match(r"PRIMARY\s+KEY\s*\((.+)\)", val, re.IGNORECASE)
+            cols = pg_quote_col_list(m.group(1)) if m else val
+            entries.append(f"    PRIMARY KEY ({cols})")
         elif kind == "UNIQUE":
             uname, ucols = val
             # Idiomatic Postgres: named UNIQUE constraint
-            entries.append(f"    CONSTRAINT {uname} UNIQUE ({ucols})")
+            entries.append(f"    CONSTRAINT {uname} UNIQUE ({pg_quote_col_list(ucols)})")
         elif kind == "CHECK":
             entries.append(f"    CHECK ({val})")
 
@@ -326,7 +350,7 @@ def format_postgres_table(tdef: TableDef) -> str:
 
     # Non-unique indexes become CREATE INDEX IF NOT EXISTS
     extra = [
-        f"CREATE INDEX IF NOT EXISTS {iname} ON {tname} ({icols});"
+        f"CREATE INDEX IF NOT EXISTS {iname} ON {tname} ({pg_quote_col_list(icols)});"
         for iname, icols in tdef.indexes
     ]
     if extra:
@@ -367,13 +391,15 @@ def main():
         postgres_parts.append(format_postgres_table(tdef))
         postgres_parts.append("")
 
-    # Postgres-only partial index for lease expiry sweeps
+    # Postgres-only partial index for lease expiry sweeps.
+    # Kept on a single line so SQLFluff's layout.indent (LT02) does not flag the
+    # continuation lines. CONCURRENTLY is intentionally omitted: this is a
+    # bootstrap schema applied in a single transaction, where CONCURRENTLY is
+    # invalid (PG01 is disabled in internal/store/postgres/.sqlfluff).
     postgres_parts.extend([
         "-- Partial index for efficient expired-lease sweeps (Postgres only).",
         "-- SQLite uses the plain leases_expires index defined above.",
-        "CREATE INDEX IF NOT EXISTS leases_expires_partial",
-        "    ON leases (expires_at)",
-        "    WHERE expires_at IS NOT NULL;",
+        "CREATE INDEX IF NOT EXISTS leases_expires_partial ON leases (expires_at) WHERE expires_at IS NOT NULL;",
         "",
     ])
 
