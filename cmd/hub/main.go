@@ -22,6 +22,7 @@ import (
 	"github.com/ravencloak-org/caw/internal/githubapp"
 	"github.com/ravencloak-org/caw/internal/hub"
 	"github.com/ravencloak-org/caw/internal/mergeability"
+	"github.com/ravencloak-org/caw/internal/observability"
 	"github.com/ravencloak-org/caw/internal/server"
 	"github.com/ravencloak-org/caw/internal/settle"
 	"github.com/ravencloak-org/caw/internal/sse"
@@ -30,6 +31,16 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	shutdownObs, err := observability.Init(context.Background(), cfg)
+	if err != nil {
+		log.Fatalf("observability init: %v", err)
+	}
+	defer func() {
+		if err := shutdownObs(context.Background()); err != nil {
+			log.Printf("observability shutdown: %v", err)
+		}
+	}()
 
 	st, err := store.Open(cfg.DatabasePath)
 	if err != nil {

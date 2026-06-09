@@ -5,11 +5,15 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" database/sql driver
 )
 
@@ -106,7 +110,15 @@ type PendingItem struct {
 // (owner, repo, number, signal_type); a newer write replaces the prior one
 // (ADR-0006). The stored timestamp is set to now.
 func (s *Store) UpsertPending(p PendingItem) error {
-	_, err := s.db.Exec(
+	ctx, span := otel.Tracer("caw-hub/store").Start(context.Background(), "store.upsert_pending")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("github.owner", p.Owner),
+		attribute.String("github.repo", p.Repo),
+		attribute.Int("github.pr_number", p.Number),
+		attribute.String("store.signal_type", p.SignalType),
+	)
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO pending (owner, repo, number, signal_type, sha, pr_state, summary, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(owner, repo, number, signal_type) DO UPDATE SET
@@ -115,6 +127,8 @@ func (s *Store) UpsertPending(p PendingItem) error {
 		p.Owner, p.Repo, p.Number, p.SignalType, p.SHA, p.PRState, p.Summary, time.Now().Unix(),
 	)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "upsert pending")
 		return fmt.Errorf("upsert pending: %w", err)
 	}
 	return nil

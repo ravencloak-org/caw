@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -237,12 +238,12 @@ func TestIngest_InstallationRouting(t *testing.T) {
 
 	// An installation event has no repository fields; ingest must not drop it.
 	env := installEnvelope("created", 20, "org20", nil)
-	if err := h.ingest("installation", env); err != nil {
+	if err := h.ingest(context.Background(), "installation", env); err != nil {
 		t.Fatalf("ingest installation: %v", err)
 	}
 
 	env2 := installReposEnvelope(20, repos("org20/foo"), nil)
-	if err := h.ingest("installation_repositories", env2); err != nil {
+	if err := h.ingest(context.Background(), "installation_repositories", env2); err != nil {
 		t.Fatalf("ingest installation_repositories: %v", err)
 	}
 	ok, err := st.RepoInInstallation("20", "org20/foo")
