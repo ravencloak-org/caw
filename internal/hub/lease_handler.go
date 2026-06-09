@@ -43,6 +43,12 @@ func (h *Hub) HandleAcquireLease(c *gin.Context) {
 		c.String(http.StatusUnauthorized, "installation id missing from context")
 		return
 	}
+	// Defense-in-depth: the "setup" sentinel token must never acquire leases.
+	// RequireRepoScope already blocks it, but guard here too for belt-and-suspenders.
+	if holder == "setup" {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
 
 	res, err := h.store.AcquireLease(owner, repo, num, holder, defaultLeaseDuration)
 	if err != nil {

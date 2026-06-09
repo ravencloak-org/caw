@@ -39,9 +39,10 @@ func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte,
 	}
 
 	authMW := auth.Required(st)
+	scopeMW := hub.RequireRepoScope(st)
 	r.GET("/pending", authMW, h.HandlePending)
-	r.GET("/sse/:owner/:repo/:number", authMW, sseHub.Handler(sseKey))
-	r.POST("/leases/:owner/:repo/:number", authMW, h.HandleAcquireLease)
+	r.GET("/sse/:owner/:repo/:number", authMW, scopeMW, sseHub.Handler(sseKey))
+	r.POST("/leases/:owner/:repo/:number", authMW, scopeMW, h.HandleAcquireLease)
 
 	return r
 }
