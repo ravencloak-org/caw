@@ -13,7 +13,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -49,8 +49,8 @@ func Init(ctx context.Context, cfg config.Config) (func(context.Context) error, 
 		return nil, fmt.Errorf("observability: build resource: %w", err)
 	}
 
-	// --- trace exporter (OTLP HTTP) ------------------------------------------
-	traceExp, err := otlptracehttp.New(ctx)
+	// --- trace exporter (OTLP gRPC) ------------------------------------------
+	traceExp, err := otlptracegrpc.New(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("observability: trace exporter: %w", err)
 	}
