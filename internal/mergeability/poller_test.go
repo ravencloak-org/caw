@@ -28,7 +28,7 @@ func TestPollerClassifies(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			sig, ok, err := New(ghclient.New(srv.URL, "")).Mergeability("o", "r", 1, "sha")
+			sig, ok, err := New(ghclient.New(srv.URL, nil)).Mergeability("o", "r", 1, "sha")
 			if err != nil || !ok {
 				t.Fatalf("err=%v ok=%v", err, ok)
 			}
@@ -52,7 +52,7 @@ func TestPollerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, ok, err := New(ghclient.New(srv.URL, "")).Mergeability("o", "r", 1, "sha"); ok || err == nil {
+	if _, ok, err := New(ghclient.New(srv.URL, nil)).Mergeability("o", "r", 1, "sha"); ok || err == nil {
 		t.Fatalf("expected error/!ok on 404, got ok=%v err=%v", ok, err)
 	}
 }

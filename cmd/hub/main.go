@@ -66,13 +66,16 @@ func main() {
 
 	sseHub := sse.New()
 	var opts []settle.Option
+
+	// Resolve the GitHub REST token source for the mergeability poll and
+	// auto-merge: prefer GitHub App installation tokens (scoped per repo), then
+	// a static PAT (CAW_GITHUB_TOKEN); leave both disabled if neither is set.
 	var ghClient *ghclient.Client
-	if cfg.GitHubToken != "" {
-		ghClient = ghclient.New(cfg.GitHubAPIBase, cfg.GitHubToken)
-		poller := mergeability.New(ghClient)
-		opts = append(opts, settle.WithPoller(poller))
+	if tokenSrc := buildGitHubTokenSource(cfg, st); tokenSrc != nil {
+		ghClient = ghclient.New(cfg.GitHubAPIBase, tokenSrc)
+		opts = append(opts, settle.WithPoller(mergeability.New(ghClient)))
 	} else {
-		log.Println("warning: CAW_GITHUB_TOKEN is empty; mergeability polling disabled")
+		log.Println("warning: no GitHub App key or CAW_GITHUB_TOKEN; mergeability poll + auto-merge disabled")
 	}
 
 	// Wire orphan rebase handler (Slice 6, ADR-0002/0005).
@@ -119,9 +122,6 @@ func main() {
 
 	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, mintFn)
 
-	// Build the installation token client if GitHub App credentials are configured.
-	_ = buildInstallTokenClient(cfg)
-
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           r,
@@ -163,25 +163,66 @@ func buildMintFn(st *store.Store) func(installationID, org string) (string, erro
 	}
 }
 
-// buildInstallTokenClient constructs an InstallationTokenClient if the app
-// credentials are configured. Returns nil when credentials are absent.
-func buildInstallTokenClient(cfg config.Config) *githubapp.InstallationTokenClient {
-	if cfg.AppID == "" {
+// buildGitHubTokenSource resolves how the Hub authenticates its outbound GitHub
+// REST calls (the mergeability poll + auto-merge). It prefers GitHub App
+// installation tokens (minted per repo's installation and auto-refreshed), then
+// a static PAT (CAW_GITHUB_TOKEN). Returns nil when neither is configured.
+func buildGitHubTokenSource(cfg config.Config, st *store.Store) ghclient.TokenSource {
+	if itc := buildInstallTokenClient(cfg, st); itc != nil {
+		log.Println("GitHub App installation tokens enabled for mergeability poll + auto-merge")
+		return func(ctx context.Context, owner, repo string) (string, error) {
+			instID, ok, err := st.InstallationForRepo(owner + "/" + repo)
+			if err != nil {
+				return "", err
+			}
+			if !ok {
+				return "", fmt.Errorf("no GitHub App installation for %s/%s", owner, repo)
+			}
+			return itc.Token(ctx, instID)
+		}
+	}
+	if cfg.GitHubToken != "" {
+		log.Println("using CAW_GITHUB_TOKEN (PAT) for mergeability poll + auto-merge")
+		return ghclient.StaticToken(cfg.GitHubToken)
+	}
+	return nil
+}
+
+// buildInstallTokenClient constructs an InstallationTokenClient from GitHub App
+// credentials, sourced from the environment (CAW_APP_ID + private key) or, for
+// any missing piece, from the manifest-stored credentials in the database.
+// Returns nil when no App id + private key are available.
+func buildInstallTokenClient(cfg config.Config, st *store.Store) *githubapp.InstallationTokenClient {
+	appID := cfg.AppID
+	var pem []byte
+	if cfg.AppPrivateKeyPEM != "" || cfg.AppPrivateKeyPath != "" {
+		b, err := loadPEM(cfg)
+		if err != nil {
+			log.Printf("warning: GitHub App PEM unavailable: %v", err)
+		} else {
+			pem = b
+		}
+	}
+	// Fall back to manifest-stored credentials for any missing piece.
+	if appID == "" || len(pem) == 0 {
+		if creds, ok, err := st.LoadAppCredentials(); err == nil && ok {
+			if appID == "" {
+				appID = creds.AppID
+			}
+			if len(pem) == 0 && creds.PEM != "" {
+				pem = []byte(creds.PEM)
+			}
+		}
+	}
+	if appID == "" || len(pem) == 0 {
 		return nil
 	}
 
-	pemBytes, err := loadPEM(cfg)
-	if err != nil {
-		log.Printf("warning: GitHub App PEM unavailable: %v; installation token client disabled", err)
-		return nil
-	}
-
-	signer, err := githubapp.NewAppJWTSigner(cfg.AppID, pemBytes)
+	signer, err := githubapp.NewAppJWTSigner(appID, pem)
 	if err != nil {
 		log.Printf("warning: NewAppJWTSigner: %v; installation token client disabled", err)
 		return nil
 	}
-
 	apiBase := cfg.GitHubAPIBase
 	if apiBase == "" {
 		apiBase = "https://api.github.com"

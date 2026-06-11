@@ -148,7 +148,7 @@ func readSummary(t *testing.T, body io.Reader) e2eSummary {
 func TestE2E_LivePath_ChecksAndMergeability(t *testing.T) {
 	gh := fakeGitHub(t, "behind")
 	ts, token, _ := newTestServerOpts(t, 30*time.Millisecond, func(_ *store.Store) []settle.Option {
-		return []settle.Option{settle.WithPoller(mergeability.New(ghclient.New(gh.URL, "tok")))}
+		return []settle.Option{settle.WithPoller(mergeability.New(ghclient.New(gh.URL, ghclient.StaticToken("tok"))))}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -201,14 +201,16 @@ func TestE2E_OrphanRebase_FullFallback(t *testing.T) {
 	merger := &fakeMerger{}
 
 	ts, token, st := newTestServerOpts(t, 15*time.Millisecond, func(st *store.Store) []settle.Option {
-		poller := mergeability.New(ghclient.New(gh.URL, "tok"))
+		poller := mergeability.New(ghclient.New(gh.URL, ghclient.StaticToken("tok")))
 		oh := rebase.NewOrphanHandler("hub-orphan", st, runner, merger)
 		return []settle.Option{settle.WithPoller(poller), settle.WithOrphanRebaseHandler(oh)}
 	})
 
 	postWebhook(t, ts.URL, "check_suite", "d1", checkSuiteFailure)
 
-	// Wait for the orphan rebase to run end-to-end.
+	// Wait for the orphan rebase to run end-to-end. Poll in-memory counters
+	// (not the store) so we don't contend with the orphan handler's own lease
+	// writes while it works.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		f, rb, fp := runner.counts()
