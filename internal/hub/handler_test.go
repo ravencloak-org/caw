@@ -102,32 +102,54 @@ func TestHandleWebhook_EmptySecretRejects(t *testing.T) {
 
 func TestHandleWebhook_PrefersStoredAppSecret(t *testing.T) {
 	envSecret := []byte("env-secret")
+	const appSecret = "app-webhook-secret"
 	r, st := newHarness(t, envSecret)
 
 	// A GitHub App provisioned via the manifest flow carries its own webhook
 	// secret; once stored it is authoritative over CAW_GH_WEBHOOK_SECRET.
-	const appSecret = "app-webhook-secret"
 	if err := st.SaveAppCredentials(store.AppCredentials{AppID: "123", WebhookSecret: appSecret}); err != nil {
 		t.Fatalf("save app credentials: %v", err)
 	}
 
-	// Signed with the App secret -> accepted.
-	if w := post(r, prBody, map[string]string{
-		"X-Hub-Signature-256": sign([]byte(appSecret), prBody),
-		"X-GitHub-Event":      "pull_request",
-		"X-GitHub-Delivery":   "app-sig",
-	}); w.Code != http.StatusAccepted {
-		t.Fatalf("app-signed status = %d, want 202; body=%q", w.Code, w.Body.String())
+	cases := []struct {
+		name       string
+		secret     []byte
+		delivery   string
+		wantStatus int
+	}{
+		{"app-secret accepted", []byte(appSecret), "app-sig", http.StatusAccepted},
+		{"env-secret rejected", envSecret, "env-sig", http.StatusUnauthorized},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := post(r, prBody, map[string]string{
+				"X-Hub-Signature-256": sign(tc.secret, prBody),
+				"X-GitHub-Event":      "pull_request",
+				"X-GitHub-Delivery":   tc.delivery,
+			})
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%q", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
 
-	// Signed with only the env secret -> rejected, because the stored App secret
-	// now takes precedence.
-	if w := post(r, prBody, map[string]string{
-		"X-Hub-Signature-256": sign(envSecret, prBody),
+func TestHandleWebhook_AppCredsLoadErrorFailsClosed(t *testing.T) {
+	secret := []byte("env-secret")
+	r, st := newHarness(t, secret)
+	// Force LoadAppCredentials to fail (a closed store errors on query). The
+	// handler must fail closed (500) rather than silently fall back to the env
+	// secret and verify under an unintended secret.
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	w := post(r, prBody, map[string]string{
+		"X-Hub-Signature-256": sign(secret, prBody),
 		"X-GitHub-Event":      "pull_request",
-		"X-GitHub-Delivery":   "env-sig",
-	}); w.Code != http.StatusUnauthorized {
-		t.Fatalf("env-signed status = %d, want 401 once App secret stored", w.Code)
+		"X-GitHub-Delivery":   "store-err",
+	})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 on app-credentials load failure; body=%q", w.Code, w.Body.String())
 	}
 }
 
