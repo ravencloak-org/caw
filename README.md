@@ -48,7 +48,7 @@ One portable service; identical artifact self-hosted or run as SaaS ([ADR-0001](
 - **Round settle** — on `check_suite completed` + grace window, run the mergeability poll, compile the summary.
 - **SSE** — `GET /sse/{owner}/{repo}/{number}` (authenticated via Hub-minted installation token — [ADR-0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)); fans compiled summaries out to all held connections for the key.
 - **Pending store** — SQLite; latest summary per PR per signal-type when no listener; newer same-type events replace, nothing else clears. `GET /pending` (one-shot startup check, returns all). No `ack` ([ADR-0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md)).
-- **Rebase lease** — Hub grants the single force-push lease to one actor; for orphaned PRs the Hub itself takes it: "Update branch" + enable auto-merge ([ADR-0002](./docs/adr/0002-agent-owned-rebase.md), [ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)).
+- **Rebase lease** — Hub grants the single force-push lease to one actor via `POST /leases/{owner}/{repo}/{number}` (renew with `PUT …/heartbeat`, drop with `DELETE …`); for orphaned PRs the Hub itself takes it: "Update branch" + enable auto-merge ([ADR-0002](./docs/adr/0002-agent-owned-rebase.md), [ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)).
 
 ### Watcher (MCP server)
 Local, runs in the harness; the universal contract across harnesses.
@@ -59,18 +59,38 @@ Local, runs in the harness; the universal contract across harnesses.
 - Renders summaries (label + symbol + colour). SessionStart hook reminds the agent to call `get_pending()`.
 
 ### GitHub App
-Auth for both modes via the App Manifest flow ([ADR rationale in CONTEXT](./CONTEXT.md)).
+Auth for both modes via the App Manifest flow — the App is the Hub's GitHub identity, never a stored PAT.
 
 - **SaaS:** hosted App; user clicks *Install*, picks repos. No stored PATs.
-- **Self-host:** Manifest flow provisions the user's own App pointing at their Hub.
+- **Self-host:** `GET /github/app/manifest` runs the Manifest flow and provisions the user's own App pointing at their Hub; `GET /github/app/callback` mints and persists the credentials. Both routes are gated by `CAW_BOOTSTRAP_TOKEN` (sent as `Authorization: Bearer …` or `X-Caw-Token`) and stay disabled until it is set — and refuse to overwrite live credentials unless `ALLOW_REBOOTSTRAP=1` ([ADR rationale in CONTEXT](./CONTEXT.md)).
 - Events: `check_suite`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`.
 - Permissions (pin exact scopes at build): `pull_requests:read/write`, `contents:write`, `checks:read`.
 - The **local agent keeps its own `gh`/git creds** — the App is the Hub's identity only.
 
-## Deploy modes
+## Self-host
 
-- **Self-host:** `docker compose up` the Hub **+ bundled OpenObserve** (default OTLP sink), run the Manifest flow, point the Watcher at your Hub URL.
-- **SaaS:** install the hosted App, install the Watcher, subscribe. (Pricing TBD.)
+The Hub is a single static binary ([ADR-0001](./docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md)); `docker compose up` brings up the Hub **+ bundled OpenObserve** (default OTLP sink — [ADR-0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)).
+
+```sh
+cp .env.example .env        # then fill in secrets (see below)
+docker compose up           # Hub on :8080, OpenObserve UI on :5080
+```
+
+Required `.env` values:
+
+- `CAW_GH_WEBHOOK_SECRET` — shared secret to verify GitHub's `X-Hub-Signature-256`; set the same value in the App's webhook config.
+- `CAW_BASE_URL` — this Hub's public URL (e.g. `https://caw.example.com`); required for the manifest flow.
+- `CAW_BOOTSTRAP_TOKEN` — one-time operator secret that gates the manifest routes (`openssl rand -hex 32`).
+- `ZO_ROOT_USER_EMAIL` / `ZO_ROOT_USER_PASSWORD` and the matching `OTEL_EXPORTER_OTLP_HEADERS` — OpenObserve root login plus its OTLP Basic-auth header (the compose file already wires `OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5081`). Unset the endpoint to disable telemetry export entirely.
+
+Then:
+
+1. **Create the GitHub App** — hit `GET /github/app/manifest` with the bootstrap token in the `Authorization: Bearer` header to run the App Manifest flow; the callback mints and stores the App credentials (App ID, private key, OAuth client) in the Hub's DB.
+2. **Install the App** on the repos you want watched.
+3. **Mint a Watcher token** — `hub mint-token <installation_id> [org]` (the raw token is never echoed by the manifest callback).
+4. **Point a Watcher** (the MCP server in your harness) at the Hub URL with that token and `subscribe_pr(owner, repo, number)`.
+
+**SaaS:** install the hosted App, install the Watcher, subscribe. (Pricing TBD.)
 
 ## Observability
 
@@ -80,25 +100,28 @@ The Hub is instrumented with the **OpenTelemetry Go SDK** and emits traces/logs/
 - **Bring your own:** point `OTEL_EXPORTER_OTLP_ENDPOINT` at any OTLP backend (your OpenObserve, Grafana/Tempo, Datadog…), or unset it to disable export.
 - Telemetry never lands in the Hub's SQLite/Postgres; OpenObserve owns its own storage (local disk, or S3/GCS at scale).
 
-## Build slices (suggested order)
+## Build slices
+
+All slices below are merged.
 
 1. **Hub core** — webhook ingest + signature verify + Round bucketing + SQLite pending store.
-2. **Compile + SSE** — `check_suite`+grace settle (+ same-SHA re-settle), summary compiler, fan-out SSE push, installation-token auth, `get_pending`.
+2. **Compile + SSE** — `check_suite`+grace settle (+ same-SHA re-settle), summary compiler, fan-out SSE push ([ADR-0007](./docs/adr/0007-subscriptions-fan-out.md)), installation-token auth, `get_pending`.
 3. **Mergeability poll** — settle-time poll; emit the Mergeability signal.
-4. **Watcher MCP** — `subscribe_pr` / `get_pending` / `ack`, summary rendering, SessionStart hook.
+4. **Watcher MCP** — `subscribe_pr` / `get_pending` / `acquire_rebase_lease`, summary rendering, SessionStart hook.
 5. **GitHub App + Manifest** — App, install/manifest flows, installation tokens.
-6. **Rebase** — Session-side rebase guidance + Hub orphan fallback + auto-merge.
-7. **Severity** — CodeRabbit parser → normalised severity; label/symbol/colour rendering.
+6. **Rebase** — Session-side rebase + Hub orphan fallback + auto-merge under the lease ([ADR-0002](./docs/adr/0002-agent-owned-rebase.md), [ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)).
+7. **Severity** — CodeRabbit parser → normalised severity (`internal/severity`); label/symbol/colour rendering.
+8. **Observability** — OpenTelemetry Go SDK → OTLP, bundled OpenObserve sink ([ADR-0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)).
+9. **Schema source-of-truth** — Dolt versions the schema and generates the SQLite + Postgres DDL ([ADR-0009](./docs/adr/0009-dolt-versioned-schema-source-of-truth.md)).
 
-## Open questions (parked for build time)
+## Roadmap / parked
 
-- Exact GitHub App permission scopes.
-- CodeRabbit comment format → severity parsing (and the next first-class source).
-- Grace-window duration (start ~30s; tune) and rebase-lease TTL (~60–120s; tune).
-- Channels: re-add as an optional Claude push lane once it reaches general release.
+- **SaaS** hosted offering + pricing.
+- **Channels:** an optional Claude push lane, once it reaches general release — the portable contract stays MCP either way.
+- Tuning knobs in flight: grace-window duration and rebase-lease TTL/heartbeat.
 
-_Resolved during design grilling: SSE auth ([ADR-0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)); fan-out vs. single-owner ([ADR-0002](./docs/adr/0002-agent-owned-rebase.md) amend, [ADR-0005](./docs/adr/0005-hub-granted-rebase-lease.md)); re-settle ([ADR-0004](./docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md)); pending model ([ADR-0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md))._
+_Decisions are recorded as ADRs: portable Go+SQLite Hub ([0001](./docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md)), agent-owned rebase ([0002](./docs/adr/0002-agent-owned-rebase.md)), SSE auth ([0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)), re-settle ([0004](./docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md)), Hub-granted lease ([0005](./docs/adr/0005-hub-granted-rebase-lease.md)), pending model ([0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md)), fan-out ([0007](./docs/adr/0007-subscriptions-fan-out.md)), observability ([0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)), Dolt schema ([0009](./docs/adr/0009-dolt-versioned-schema-source-of-truth.md))._
 
 ## Status
 
-Pre-implementation. Design converged; see `CONTEXT.md` + ADRs. No code yet.
+POC — all build slices (1–9) merged and **deployed**. A live Hub runs at [caw.ravencloak.org](https://caw.ravencloak.org) (Docker + Cloudflare tunnel). Design converged; see `CONTEXT.md` + the ADRs.
