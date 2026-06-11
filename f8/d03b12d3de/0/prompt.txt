@@ -1,0 +1,43 @@
+merge #21 and #7 when green, then do #6
+
+---
+
+<task-notification>
+<task-id>a45b4699f0e73bcc8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Slice 6 Rebase" completed</summary>
+<result>Done.
+
+**PR: https://github.com/ravencloak-org/caw/pull/23**
+
+Key files shipped (all in worktree root `/Users/jobinlawrance/Project/caw/.claude/worktrees/agent-a45b4699f0e73bcc8/`):
+
+- `internal/rebase/rebase.go` — `GitRunner` interface + `Config` struct
+- `internal/rebase/session.go` — `Session.Run` with 30s heartbeat, `LeaseRenewer` interface
+- `internal/rebase/session_test.go` — 7 tests, no real git
+- `internal/rebase/orphan.go` — `OrphanHandler.TriggerOrphanRebase`, `LeaseStore`/`AutoMerger` interfaces, 90s TTL
+- `internal/rebase/orphan_test.go` — 8 tests
+- `internal/rebase/exec.go` — production `ExecRunner` via `os/exec`
+- `cmd/hub/main.go` — orphan handler wired with nil-safe `AutoMerger`
+- `cmd/watcher/main.go` — 3 new MCP tools + `clientLeaseAdapter`
+
+All checks: `go test -race ./...` green, `golangci-lint` 0 issues, `go build` clean.</result>
+<usage><subagent_tokens>163230</subagent_tokens><tool_uses>123</tool_uses><duration_ms>2175099</duration_ms></usage>
+<worktree><worktreePath>/Users/jobinlawrance/Project/caw/.claude/worktrees/agent-a45b4699f0e73bcc8</worktreePath><worktreeBranch>worktree-agent-a45b4699f0e73bcc8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bfh3doc7o</task-id>
+<tool-use-id>toolu_01BdmXNkrovviim7xPfkZLWT</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 23 CI to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+what's pending now?
