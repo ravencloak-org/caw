@@ -483,3 +483,60 @@ func (s *Store) GetLease(org, repo string, prNumber int) (Lease, bool, error) {
 		return l, true, nil
 	}
 }
+
+// RenewLease extends expires_at and updates last_heartbeat_at for an active lease.
+// Only the current holder may renew; the lease must not be expired.
+// extendBy is added to now to compute the new expires_at (≥ 1 is required).
+// Returns the updated lease on success. Returns an error if the lease does not
+// exist, is expired, or holder does not match.
+func (s *Store) RenewLease(org, repo string, prNumber int, holder string, extendBy int64) (Lease, error) {
+	now := time.Now().Unix()
+	newExpires := now + extendBy
+	res, err := s.db.Exec(
+		`UPDATE leases
+		 SET expires_at = ?, last_heartbeat_at = ?
+		 WHERE org = ? AND repo = ? AND pr_number = ? AND holder = ? AND expires_at >= ?`,
+		newExpires, now,
+		org, repo, prNumber, holder, now,
+	)
+	if err != nil {
+		return Lease{}, fmt.Errorf("renew lease: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Lease{}, fmt.Errorf("renew lease: rows affected: %w", err)
+	}
+	if n == 0 {
+		return Lease{}, fmt.Errorf("renew lease: no matching active lease for holder %q", holder)
+	}
+	l, ok, err := s.GetLease(org, repo, prNumber)
+	if err != nil {
+		return Lease{}, fmt.Errorf("renew lease: read back: %w", err)
+	}
+	if !ok {
+		return Lease{}, fmt.Errorf("renew lease: lease disappeared after update")
+	}
+	return l, nil
+}
+
+// ReleaseLease deletes the lease for the given PR.
+// Only the current holder may release their own lease.
+// Returns an error if no matching lease exists (not held by holder, already
+// released, or never acquired).
+func (s *Store) ReleaseLease(org, repo string, prNumber int, holder string) error {
+	res, err := s.db.Exec(
+		`DELETE FROM leases WHERE org = ? AND repo = ? AND pr_number = ? AND holder = ?`,
+		org, repo, prNumber, holder,
+	)
+	if err != nil {
+		return fmt.Errorf("release lease: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("release lease: rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("release lease: no lease held by %q for %s/%s#%d", holder, org, repo, prNumber)
+	}
+	return nil
+}

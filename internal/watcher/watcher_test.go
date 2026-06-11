@@ -24,6 +24,12 @@ type fakeHub struct {
 	leaseStatusCode int
 	// leaseBody is the JSON body returned by the lease endpoint.
 	leaseBody string
+	// renewStatusCode is the HTTP status returned by PUT .../heartbeat.
+	renewStatusCode int
+	// renewBody is the JSON body returned by the renew endpoint.
+	renewBody string
+	// releaseStatusCode is the HTTP status returned by DELETE /leases/...
+	releaseStatusCode int
 	// sseMessages are sent to SSE subscribers in order then the stream is closed.
 	sseMessages []string
 }
@@ -31,9 +37,12 @@ type fakeHub struct {
 func newFakeHub(t *testing.T) *fakeHub {
 	t.Helper()
 	fh := &fakeHub{
-		pendingResp:     `{"items":[]}`,
-		leaseStatusCode: http.StatusOK,
-		leaseBody:       `{"granted":true,"holder":"inst-A","expires_at":9999999999,"last_heartbeat_at":0,"acquired_at":1}`,
+		pendingResp:       `{"items":[]}`,
+		leaseStatusCode:   http.StatusOK,
+		leaseBody:         `{"granted":true,"holder":"inst-A","expires_at":9999999999,"last_heartbeat_at":0,"acquired_at":1}`,
+		renewStatusCode:   http.StatusOK,
+		renewBody:         `{"granted":true,"holder":"inst-A","expires_at":9999999999,"last_heartbeat_at":1,"acquired_at":1}`,
+		releaseStatusCode: http.StatusNoContent,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pending", func(w http.ResponseWriter, r *http.Request) {
@@ -50,17 +59,24 @@ func newFakeHub(t *testing.T) *fakeHub {
 		_, _ = fmt.Fprint(w, fh.pendingResp)
 	})
 	mux.HandleFunc("/leases/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(fh.leaseStatusCode)
-		_, _ = fmt.Fprint(w, fh.leaseBody)
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(fh.leaseStatusCode)
+			_, _ = fmt.Fprint(w, fh.leaseBody)
+		case http.MethodPut:
+			// heartbeat endpoint: PUT /leases/:owner/:repo/:number/heartbeat
+			w.WriteHeader(fh.renewStatusCode)
+			_, _ = fmt.Fprint(w, fh.renewBody)
+		case http.MethodDelete:
+			w.WriteHeader(fh.releaseStatusCode)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 	mux.HandleFunc("/sse/", func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
@@ -305,5 +321,136 @@ func TestSubscribePR_SendsBearerToken(t *testing.T) {
 
 	if gotAuth != "Bearer watch-token" {
 		t.Errorf("Authorization = %q, want 'Bearer watch-token'", gotAuth)
+	}
+}
+
+// --- RenewRebaseLease tests ---
+
+func TestRenewRebaseLease_Success(t *testing.T) {
+	fh := newFakeHub(t)
+	fh.renewStatusCode = http.StatusOK
+	fh.renewBody = `{"granted":true,"holder":"inst-A","expires_at":9999,"last_heartbeat_at":500,"acquired_at":1}`
+	c := newTestClient(t, fh)
+
+	res, err := c.RenewRebaseLease(context.Background(), "org", "repo", 1, "inst-A")
+	if err != nil {
+		t.Fatalf("RenewRebaseLease: %v", err)
+	}
+	if !res.Granted {
+		t.Fatal("expected granted=true")
+	}
+	if res.Holder != "inst-A" {
+		t.Errorf("holder = %q, want inst-A", res.Holder)
+	}
+	if res.LastHeartbeatAt != 500 {
+		t.Errorf("last_heartbeat_at = %d, want 500", res.LastHeartbeatAt)
+	}
+}
+
+func TestRenewRebaseLease_WrongHolder_ReturnsError(t *testing.T) {
+	fh := newFakeHub(t)
+	fh.renewStatusCode = http.StatusForbidden
+	fh.renewBody = `{"error":"forbidden"}`
+	c := newTestClient(t, fh)
+
+	_, err := c.RenewRebaseLease(context.Background(), "org", "repo", 1, "inst-X")
+	if err == nil {
+		t.Fatal("expected error for 403 response")
+	}
+}
+
+func TestRenewRebaseLease_SendsBearerTokenAndHolder(t *testing.T) {
+	var gotAuth, gotHolder string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotHolder = r.Header.Get("X-Lease-Holder")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"granted":true,"holder":"inst-A","expires_at":9999,"last_heartbeat_at":1,"acquired_at":1}`)
+	}))
+	t.Cleanup(ts.Close)
+
+	c := watcher.NewClient(ts.URL, "my-tok")
+	_, err := c.RenewRebaseLease(context.Background(), "o", "r", 1, "inst-A")
+	if err != nil {
+		t.Fatalf("RenewRebaseLease: %v", err)
+	}
+	if gotAuth != "Bearer my-tok" {
+		t.Errorf("Authorization = %q, want 'Bearer my-tok'", gotAuth)
+	}
+	if gotHolder != "inst-A" {
+		t.Errorf("X-Lease-Holder = %q, want inst-A", gotHolder)
+	}
+}
+
+func TestRenewRebaseLease_ServerError_ReturnsError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	c := watcher.NewClient(ts.URL, "tok")
+	_, err := c.RenewRebaseLease(context.Background(), "o", "r", 1, "h")
+	if err == nil {
+		t.Fatal("expected error for 500")
+	}
+}
+
+// --- ReleaseRebaseLease tests ---
+
+func TestReleaseRebaseLease_Success(t *testing.T) {
+	fh := newFakeHub(t)
+	fh.releaseStatusCode = http.StatusNoContent
+	c := newTestClient(t, fh)
+
+	if err := c.ReleaseRebaseLease(context.Background(), "org", "repo", 1, "inst-A"); err != nil {
+		t.Fatalf("ReleaseRebaseLease: %v", err)
+	}
+}
+
+func TestReleaseRebaseLease_WrongHolder_ReturnsError(t *testing.T) {
+	fh := newFakeHub(t)
+	fh.releaseStatusCode = http.StatusForbidden
+	c := newTestClient(t, fh)
+
+	err := c.ReleaseRebaseLease(context.Background(), "org", "repo", 1, "inst-X")
+	if err == nil {
+		t.Fatal("expected error for 403 response")
+	}
+}
+
+func TestReleaseRebaseLease_SendsBearerTokenAndHolder(t *testing.T) {
+	var gotAuth, gotHolder, gotMethod string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotHolder = r.Header.Get("X-Lease-Holder")
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(ts.Close)
+
+	c := watcher.NewClient(ts.URL, "my-tok")
+	if err := c.ReleaseRebaseLease(context.Background(), "o", "r", 1, "inst-A"); err != nil {
+		t.Fatalf("ReleaseRebaseLease: %v", err)
+	}
+	if gotAuth != "Bearer my-tok" {
+		t.Errorf("Authorization = %q, want 'Bearer my-tok'", gotAuth)
+	}
+	if gotHolder != "inst-A" {
+		t.Errorf("X-Lease-Holder = %q, want inst-A", gotHolder)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+}
+
+func TestReleaseRebaseLease_ServerError_ReturnsError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	c := watcher.NewClient(ts.URL, "tok")
+	if err := c.ReleaseRebaseLease(context.Background(), "o", "r", 1, "h"); err == nil {
+		t.Fatal("expected error for 500")
 	}
 }

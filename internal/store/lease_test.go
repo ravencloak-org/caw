@@ -170,3 +170,127 @@ func TestAcquireLease_IsolatedByPR(t *testing.T) {
 		t.Error("inst-B should be denied PR#1 held by inst-A")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RenewLease
+// ---------------------------------------------------------------------------
+
+func TestRenewLease_HolderCanRenew(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.AcquireLease("o", "r", 1, "inst-A", 300)
+	if err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+
+	updated, err := s.RenewLease("o", "r", 1, "inst-A", 90)
+	if err != nil {
+		t.Fatalf("RenewLease: %v", err)
+	}
+	if updated.Holder != "inst-A" {
+		t.Errorf("holder after renew = %q, want inst-A", updated.Holder)
+	}
+	now := time.Now().Unix()
+	if updated.ExpiresAt < now+80 || updated.ExpiresAt > now+100 {
+		t.Errorf("ExpiresAt %d not within expected range of now+90", updated.ExpiresAt)
+	}
+	if updated.LastHeartbeatAt < now-2 || updated.LastHeartbeatAt > now+2 {
+		t.Errorf("LastHeartbeatAt %d should be near now (%d)", updated.LastHeartbeatAt, now)
+	}
+}
+
+func TestRenewLease_WrongHolderDenied(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.AcquireLease("o", "r", 1, "inst-A", 300)
+	if err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+
+	_, err = s.RenewLease("o", "r", 1, "inst-B", 90)
+	if err == nil {
+		t.Fatal("expected error when wrong holder tries to renew, got nil")
+	}
+}
+
+func TestRenewLease_NoLeaseErrors(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.RenewLease("o", "r", 999, "inst-A", 90)
+	if err == nil {
+		t.Fatal("expected error when renewing non-existent lease, got nil")
+	}
+}
+
+func TestRenewLease_ExpiredDenied(t *testing.T) {
+	s := newTestStore(t)
+
+	// Acquire with a negative TTL so the lease is immediately expired.
+	_, err := s.AcquireLease("o", "r", 1, "inst-A", -10)
+	if err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+
+	_, err = s.RenewLease("o", "r", 1, "inst-A", 90)
+	if err == nil {
+		t.Fatal("expected error when renewing expired lease, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReleaseLease
+// ---------------------------------------------------------------------------
+
+func TestReleaseLease_HolderCanRelease(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.AcquireLease("o", "r", 1, "inst-A", 300)
+	if err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+
+	if err := s.ReleaseLease("o", "r", 1, "inst-A"); err != nil {
+		t.Fatalf("ReleaseLease: %v", err)
+	}
+
+	_, ok, err := s.GetLease("o", "r", 1)
+	if err != nil {
+		t.Fatalf("GetLease after release: %v", err)
+	}
+	if ok {
+		t.Fatal("expected lease to be gone after release, but it still exists")
+	}
+}
+
+func TestReleaseLease_WrongHolderDenied(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.AcquireLease("o", "r", 1, "inst-A", 300)
+	if err != nil {
+		t.Fatalf("AcquireLease: %v", err)
+	}
+
+	if err := s.ReleaseLease("o", "r", 1, "inst-B"); err == nil {
+		t.Fatal("expected error when wrong holder tries to release, got nil")
+	}
+
+	// inst-A's lease should still exist.
+	l, ok, err := s.GetLease("o", "r", 1)
+	if err != nil {
+		t.Fatalf("GetLease: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected lease to still exist after failed release by wrong holder")
+	}
+	if l.Holder != "inst-A" {
+		t.Errorf("holder = %q, want inst-A", l.Holder)
+	}
+}
+
+func TestReleaseLease_NoLeaseErrors(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.ReleaseLease("o", "r", 999, "inst-A"); err == nil {
+		t.Fatal("expected error when releasing non-existent lease, got nil")
+	}
+}

@@ -144,6 +144,56 @@ func (c *Client) AcquireRebaseLease(ctx context.Context, owner, repo string, num
 	return result, nil
 }
 
+// RenewRebaseLease sends a heartbeat to PUT /leases/:owner/:repo/:number/heartbeat,
+// which extends the lease TTL. holder must match the value returned by AcquireRebaseLease.
+// Returns the updated LeaseResult on success.
+func (c *Client) RenewRebaseLease(ctx context.Context, owner, repo string, number int, holder string) (LeaseResult, error) {
+	path := fmt.Sprintf("/leases/%s/%s/%d/heartbeat", owner, repo, number)
+	req, err := c.newRequest(ctx, http.MethodPut, path)
+	if err != nil {
+		return LeaseResult{}, fmt.Errorf("renew rebase lease: build request: %w", err)
+	}
+	req.Header.Set("X-Lease-Holder", holder)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return LeaseResult{}, fmt.Errorf("renew rebase lease: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return LeaseResult{}, fmt.Errorf("renew rebase lease: status %d: %s", resp.StatusCode, body)
+	}
+
+	var result LeaseResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return LeaseResult{}, fmt.Errorf("renew rebase lease: decode: %w", err)
+	}
+	return result, nil
+}
+
+// ReleaseRebaseLease releases a force-push lease via DELETE /leases/:owner/:repo/:number.
+// holder must match the value returned by AcquireRebaseLease.
+func (c *Client) ReleaseRebaseLease(ctx context.Context, owner, repo string, number int, holder string) error {
+	path := fmt.Sprintf("/leases/%s/%s/%d", owner, repo, number)
+	req, err := c.newRequest(ctx, http.MethodDelete, path)
+	if err != nil {
+		return fmt.Errorf("release rebase lease: build request: %w", err)
+	}
+	req.Header.Set("X-Lease-Holder", holder)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("release rebase lease: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("release rebase lease: status %d: %s", resp.StatusCode, body)
+	}
+	return nil
+}
+
 // SubscribePR opens an SSE connection to GET /sse/:owner/:repo/:number and
 // calls onMsg for each parsed compile.Summary it receives. It blocks until the
 // context is canceled, the server closes the stream, or a fatal read error occurs.

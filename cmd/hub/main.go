@@ -23,6 +23,7 @@ import (
 	"github.com/ravencloak-org/caw/internal/hub"
 	"github.com/ravencloak-org/caw/internal/mergeability"
 	"github.com/ravencloak-org/caw/internal/observability"
+	"github.com/ravencloak-org/caw/internal/rebase"
 	"github.com/ravencloak-org/caw/internal/server"
 	"github.com/ravencloak-org/caw/internal/settle"
 	"github.com/ravencloak-org/caw/internal/sse"
@@ -65,12 +66,34 @@ func main() {
 
 	sseHub := sse.New()
 	var opts []settle.Option
+	var ghClient *ghclient.Client
 	if cfg.GitHubToken != "" {
-		poller := mergeability.New(ghclient.New(cfg.GitHubAPIBase, cfg.GitHubToken))
+		ghClient = ghclient.New(cfg.GitHubAPIBase, cfg.GitHubToken)
+		poller := mergeability.New(ghClient)
 		opts = append(opts, settle.WithPoller(poller))
 	} else {
 		log.Println("warning: CAW_GITHUB_TOKEN is empty; mergeability polling disabled")
 	}
+
+	// Wire orphan rebase handler (Slice 6, ADR-0002/0005).
+	// Use cfg.AppID as a stable holder identity; fall back to "hub-orphan".
+	holderID := cfg.AppID
+	if holderID == "" {
+		holderID = "hub-orphan"
+	}
+	// The git working directory for orphan rebases defaults to the process cwd;
+	// operators can set CAW_REBASE_DIR to override (e.g. a shared workspace).
+	rebaseDir := os.Getenv("CAW_REBASE_DIR")
+	orphanRunner := rebase.NewExecRunner(rebaseDir)
+	// Pass ghClient as rebase.AutoMerger only when it is non-nil; passing a typed
+	// nil would produce a non-nil interface with a nil pointer (runtime panic).
+	var autoMerger rebase.AutoMerger
+	if ghClient != nil {
+		autoMerger = ghClient
+	}
+	orphanHandler := rebase.NewOrphanHandler(holderID, st, orphanRunner, autoMerger)
+	opts = append(opts, settle.WithOrphanRebaseHandler(orphanHandler))
+
 	engine := settle.New(st, sseHub, settle.DefaultGrace, opts...)
 
 	// Build the GitHub App manifest handler. It is optional and gated: it

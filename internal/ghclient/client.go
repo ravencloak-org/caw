@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -38,6 +39,41 @@ type PullState struct {
 	State          string `json:"state"`
 	Mergeable      *bool  `json:"mergeable"`
 	MergeableState string `json:"mergeable_state"`
+}
+
+// EnableAutoMerge enables the GitHub auto-merge feature for a pull request using
+// the merge method (defaults to "merge" if empty). This causes GitHub to merge
+// the PR automatically once all required status checks pass (ADR-0002 Slice 6).
+func (c *Client) EnableAutoMerge(ctx context.Context, owner, repo string, number int, mergeMethod string) error {
+	if mergeMethod == "" {
+		mergeMethod = "merge"
+	}
+	// GitHub auto-merge is enabled via PATCH /repos/{owner}/{repo}/pulls/{pull_number}
+	// with { "auto_merge": { "merge_method": "..." } }.
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, owner, repo, number)
+
+	body := fmt.Sprintf(`{"auto_merge":{"merge_method":%q}}`, mergeMethod)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url,
+		strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("enable auto-merge: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("enable auto-merge: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("enable auto-merge %s/%s#%d: status %d", owner, repo, number, resp.StatusCode)
+	}
+	return nil
 }
 
 // PullMergeability fetches a PR's mergeability.

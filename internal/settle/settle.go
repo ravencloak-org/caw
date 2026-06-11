@@ -35,6 +35,13 @@ type MergeabilityPoller interface {
 	Mergeability(owner, repo string, number int, sha string) (store.Signal, bool, error)
 }
 
+// OrphanRebaseHandler is notified when a PR is orphaned (zero live sessions)
+// and the mergeability poll shows it is behind its base branch. The Hub
+// acquires the lease and performs the rebase/auto-merge on behalf of the PR.
+type OrphanRebaseHandler interface {
+	TriggerOrphanRebase(ctx context.Context, owner, repo string, number int, sha string) error
+}
+
 // Option configures an Engine.
 type Option func(*Engine)
 
@@ -43,12 +50,19 @@ func WithPoller(p MergeabilityPoller) Option {
 	return func(e *Engine) { e.poller = p }
 }
 
+// WithOrphanRebaseHandler wires an OrphanRebaseHandler that is invoked when
+// a PR settle is orphaned and the PR is behind its base branch.
+func WithOrphanRebaseHandler(h OrphanRebaseHandler) Option {
+	return func(e *Engine) { e.orphanHandler = h }
+}
+
 // Engine schedules and fires Round settles.
 type Engine struct {
-	store  *store.Store
-	pub    Publisher
-	grace  time.Duration
-	poller MergeabilityPoller // optional; nil disables the mergeability poll
+	store         *store.Store
+	pub           Publisher
+	grace         time.Duration
+	poller        MergeabilityPoller  // optional; nil disables the mergeability poll
+	orphanHandler OrphanRebaseHandler // optional; nil disables orphan rebase fallback
 
 	mu     sync.Mutex
 	rounds map[string]*roundState
@@ -79,6 +93,20 @@ func roundKey(owner, repo string, number int, sha string) string {
 }
 
 // PRKey is the SSE subscription key for a PR (owner/repo#number), independent of SHA.
+// isBehindBase reports whether any signal group in the summary contains a
+// "behind base" item — the indicator that the PR needs a rebase.
+func isBehindBase(groups []compile.SignalGroup) bool {
+	for _, g := range groups {
+		for _, item := range g.Items {
+			if item.Body == "behind base" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PRKey returns the canonical string key for a pull request: "owner/repo#number".
 func PRKey(owner, repo string, number int) string {
 	return fmt.Sprintf("%s/%s#%d", owner, repo, number)
 }
@@ -182,6 +210,14 @@ func (e *Engine) fire(rk string) {
 				log.Printf("settle %s: pend %s: %v", rk, g.Type, err)
 			}
 		}
+
+		// Orphan rebase fallback (ADR-0002 + ADR-0007): if the PR is behind
+		// its base branch and there are no live subscribers, the Hub takes over
+		// the rebase.
+		if e.orphanHandler != nil && isBehindBase(summary.Groups) {
+			if err := e.orphanHandler.TriggerOrphanRebase(ctx, owner, repo, number, sha); err != nil {
+				log.Printf("settle %s: orphan rebase trigger: %v", rk, err)
+			}
+		}
 	}
-	_ = ctx
 }
