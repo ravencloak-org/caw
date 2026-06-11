@@ -14,24 +14,43 @@ import (
 
 const defaultBaseURL = "https://api.github.com"
 
+// TokenSource resolves the bearer token for a given repository, letting the
+// client authenticate with a GitHub App installation token (scoped per repo)
+// or a static PAT. A nil TokenSource sends unauthenticated requests.
+type TokenSource func(ctx context.Context, owner, repo string) (string, error)
+
+// StaticToken returns a TokenSource that always yields tok regardless of repo
+// (a personal access token). An empty tok sends unauthenticated requests.
+func StaticToken(tok string) TokenSource {
+	return func(context.Context, string, string) (string, error) { return tok, nil }
+}
+
 // Client calls the GitHub REST API.
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
-	token      string
+	tokenSrc   TokenSource
 }
 
-// New returns a Client. An empty baseURL defaults to api.github.com; an empty
-// token sends unauthenticated requests.
-func New(baseURL, token string) *Client {
+// New returns a Client. An empty baseURL defaults to api.github.com; a nil
+// tokenSrc sends unauthenticated requests.
+func New(baseURL string, tokenSrc TokenSource) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
 	return &Client{
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 		baseURL:    baseURL,
-		token:      token,
+		tokenSrc:   tokenSrc,
 	}
+}
+
+// token resolves the bearer token for owner/repo, or "" when no source is set.
+func (c *Client) token(ctx context.Context, owner, repo string) (string, error) {
+	if c.tokenSrc == nil {
+		return "", nil
+	}
+	return c.tokenSrc(ctx, owner, repo)
 }
 
 // PullState is the subset of GET /pulls/{n} the Hub uses for mergeability.
@@ -48,6 +67,10 @@ func (c *Client) EnableAutoMerge(ctx context.Context, owner, repo string, number
 	if mergeMethod == "" {
 		mergeMethod = "merge"
 	}
+	tok, err := c.token(ctx, owner, repo)
+	if err != nil {
+		return fmt.Errorf("enable auto-merge: token: %w", err)
+	}
 	// GitHub auto-merge is enabled via PATCH /repos/{owner}/{repo}/pulls/{pull_number}
 	// with { "auto_merge": { "merge_method": "..." } }.
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, owner, repo, number)
@@ -61,8 +84,8 @@ func (c *Client) EnableAutoMerge(ctx context.Context, owner, repo string, number
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -79,14 +102,18 @@ func (c *Client) EnableAutoMerge(ctx context.Context, owner, repo string, number
 // PullMergeability fetches a PR's mergeability.
 func (c *Client) PullMergeability(ctx context.Context, owner, repo string, number int) (PullState, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL, owner, repo, number)
+	tok, err := c.token(ctx, owner, repo)
+	if err != nil {
+		return PullState{}, fmt.Errorf("mergeability token: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return PullState{}, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	resp, err := c.httpClient.Do(req)

@@ -2,6 +2,7 @@ package ghclient
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,7 +21,7 @@ func TestPullMergeability(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ps, err := New(srv.URL, "tok").PullMergeability(context.Background(), "o", "r", 1)
+	ps, err := New(srv.URL, StaticToken("tok")).PullMergeability(context.Background(), "o", "r", 1)
 	if err != nil {
 		t.Fatalf("PullMergeability: %v", err)
 	}
@@ -35,7 +36,16 @@ func TestPullMergeabilityNon200(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL, "").PullMergeability(context.Background(), "o", "r", 1); err == nil {
+	if _, err := New(srv.URL, nil).PullMergeability(context.Background(), "o", "r", 1); err == nil {
 		t.Fatal("expected error on non-200 response")
+	}
+}
+
+func TestPullMergeabilityTokenSourceError(t *testing.T) {
+	errSrc := func(context.Context, string, string) (string, error) {
+		return "", errors.New("boom")
+	}
+	if _, err := New("http://127.0.0.1:0", errSrc).PullMergeability(context.Background(), "o", "r", 1); err == nil {
+		t.Fatal("expected error when the token source fails")
 	}
 }

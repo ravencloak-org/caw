@@ -232,3 +232,17 @@ func TestTokensInsertVerifyUpsert(t *testing.T) {
 		t.Fatalf("after upsert id = %q, want inst2", id)
 	}
 }
+
+func TestInstallationForRepo(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.AddInstallationRepo("42", "ravencloak-org/caw"); err != nil {
+		t.Fatalf("AddInstallationRepo: %v", err)
+	}
+	id, ok, err := s.InstallationForRepo("ravencloak-org/caw")
+	if err != nil || !ok || id != "42" {
+		t.Fatalf("InstallationForRepo = (%q,%v,%v), want (42,true,nil)", id, ok, err)
+	}
+	if _, ok, err := s.InstallationForRepo("ravencloak-org/unknown"); err != nil || ok {
+		t.Fatalf("unknown repo: ok=%v err=%v, want (false,nil)", ok, err)
+	}
+}

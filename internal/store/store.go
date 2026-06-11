@@ -361,6 +361,23 @@ func (s *Store) RepoInInstallation(installationID, fullName string) (bool, error
 	return n > 0, nil
 }
 
+// InstallationForRepo returns the installation ID that owns a repo (full name
+// "owner/repo"). ok is false when no installation is associated with the repo.
+func (s *Store) InstallationForRepo(fullName string) (string, bool, error) {
+	var id string
+	err := s.db.QueryRow(
+		`SELECT installation_id FROM installation_repos WHERE full_name = ? LIMIT 1`,
+		fullName,
+	).Scan(&id)
+	switch {
+	case err == sql.ErrNoRows:
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("installation for repo: %w", err)
+	}
+	return id, true, nil
+}
+
 // AppCredentials holds the persisted GitHub App credentials (manifest flow).
 type AppCredentials struct {
 	AppID         string
