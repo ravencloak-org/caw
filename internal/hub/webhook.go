@@ -50,6 +50,18 @@ func (h *Hub) WithMintFunc(fn func(installationID, org string) (string, error)) 
 	return h
 }
 
+// effectiveWebhookSecret returns the secret used to verify webhook signatures.
+// A GitHub App provisioned via the manifest flow (Slice 5) carries its own
+// webhook secret in app_credentials; prefer it so App deliveries verify without
+// the operator mirroring CAW_GH_WEBHOOK_SECRET into the App config. Fall back to
+// the static secret (CAW_GH_WEBHOOK_SECRET) until App credentials exist.
+func (h *Hub) effectiveWebhookSecret() []byte {
+	if creds, ok, err := h.store.LoadAppCredentials(); err == nil && ok && creds.WebhookSecret != "" {
+		return []byte(creds.WebhookSecret)
+	}
+	return h.secret
+}
+
 // VerifySignature reports whether sigHeader ("sha256=<hex>") is a valid
 // HMAC-SHA256 of payload under secret. The comparison is constant-time.
 func VerifySignature(secret, payload []byte, sigHeader string) bool {
@@ -85,7 +97,8 @@ func (h *Hub) HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	sigOK := len(h.secret) > 0 && VerifySignature(h.secret, body, c.GetHeader("X-Hub-Signature-256"))
+	secret := h.effectiveWebhookSecret()
+	sigOK := len(secret) > 0 && VerifySignature(secret, body, c.GetHeader("X-Hub-Signature-256"))
 	span.SetAttributes(attribute.Bool("webhook.sig_ok", sigOK))
 	if !sigOK {
 		span.SetStatus(codes.Error, "invalid signature")

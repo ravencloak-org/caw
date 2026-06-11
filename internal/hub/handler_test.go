@@ -100,6 +100,37 @@ func TestHandleWebhook_EmptySecretRejects(t *testing.T) {
 	}
 }
 
+func TestHandleWebhook_PrefersStoredAppSecret(t *testing.T) {
+	envSecret := []byte("env-secret")
+	r, st := newHarness(t, envSecret)
+
+	// A GitHub App provisioned via the manifest flow carries its own webhook
+	// secret; once stored it is authoritative over CAW_GH_WEBHOOK_SECRET.
+	const appSecret = "app-webhook-secret"
+	if err := st.SaveAppCredentials(store.AppCredentials{AppID: "123", WebhookSecret: appSecret}); err != nil {
+		t.Fatalf("save app credentials: %v", err)
+	}
+
+	// Signed with the App secret -> accepted.
+	if w := post(r, prBody, map[string]string{
+		"X-Hub-Signature-256": sign([]byte(appSecret), prBody),
+		"X-GitHub-Event":      "pull_request",
+		"X-GitHub-Delivery":   "app-sig",
+	}); w.Code != http.StatusAccepted {
+		t.Fatalf("app-signed status = %d, want 202; body=%q", w.Code, w.Body.String())
+	}
+
+	// Signed with only the env secret -> rejected, because the stored App secret
+	// now takes precedence.
+	if w := post(r, prBody, map[string]string{
+		"X-Hub-Signature-256": sign(envSecret, prBody),
+		"X-GitHub-Event":      "pull_request",
+		"X-GitHub-Delivery":   "env-sig",
+	}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("env-signed status = %d, want 401 once App secret stored", w.Code)
+	}
+}
+
 func TestHandleWebhook_NonPREventNoRound(t *testing.T) {
 	secret := []byte("s3cr3t")
 	r, st := newHarness(t, secret)
