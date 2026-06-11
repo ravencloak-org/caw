@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/ravencloak-org/caw/internal/auth"
 	"github.com/ravencloak-org/caw/internal/github"
 	"github.com/ravencloak-org/caw/internal/settle"
 	"github.com/ravencloak-org/caw/internal/store"
@@ -311,13 +312,20 @@ func (h *Hub) touch(owner, repo string, number int, sha string) {
 	}
 }
 
-// HandlePending serves GET /pending: all current pending items (ADR-0006).
-// The consumer decides which to act on; each item carries its SHA, PR state,
-// and timestamp for relevance filtering.
+// HandlePending serves GET /pending: pending items scoped to the caller's
+// installation (ADR-0003, ADR-0006). The setup bootstrap token ("setup") is
+// rejected because it is not associated with any real installation.
 func (h *Hub) HandlePending(c *gin.Context) {
-	items, err := h.store.ListPending()
+	installationID, _ := c.Get(auth.ContextInstallationID)
+	holder, ok := installationID.(string)
+	if !ok || holder == "" || holder == "setup" {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+
+	items, err := h.store.ListPendingForInstallation(holder)
 	if err != nil {
-		log.Printf("list pending: %v", err)
+		log.Printf("list pending for installation %s: %v", holder, err)
 		c.String(http.StatusInternalServerError, "pending")
 		return
 	}

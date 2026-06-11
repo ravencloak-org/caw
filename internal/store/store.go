@@ -159,6 +159,38 @@ func (s *Store) ListPending() ([]PendingItem, error) {
 	return items, rows.Err()
 }
 
+// ListPendingForInstallation returns pending items whose repo belongs to the
+// given installation. It performs an inner JOIN against installation_repos so
+// that only items for repos associated with installationID are returned.
+func (s *Store) ListPendingForInstallation(installationID string) ([]PendingItem, error) {
+	rows, err := s.db.Query(
+		`SELECT p.owner, p.repo, p.number, p.signal_type, p.sha, p.pr_state, p.summary, p.updated_at
+		 FROM pending p
+		 JOIN installation_repos ir
+		   ON ir.full_name = p.owner || '/' || p.repo
+		 WHERE ir.installation_id = ?
+		 ORDER BY p.owner, p.repo, p.number, p.signal_type`,
+		installationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list pending for installation: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var items []PendingItem
+	for rows.Next() {
+		var p PendingItem
+		if err := rows.Scan(
+			&p.Owner, &p.Repo, &p.Number, &p.SignalType,
+			&p.SHA, &p.PRState, &p.Summary, &p.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan pending for installation: %w", err)
+		}
+		items = append(items, p)
+	}
+	return items, rows.Err()
+}
+
 // Signal is one observed feedback item for a Round, awaiting compilation.
 type Signal struct {
 	Owner      string

@@ -50,6 +50,15 @@ func newTestServer(t *testing.T, grace time.Duration) (*httptest.Server, string)
 	if err := st.InsertToken(hash, "inst1", "org1"); err != nil {
 		t.Fatalf("insert token: %v", err)
 	}
+	// Register inst1's installation and associate the repo used by the
+	// integration tests (owner=o, repo=r) so RequireRepoScope and
+	// ListPendingForInstallation find the repo in installation_repos.
+	if err := st.UpsertInstallation("inst1", "org1"); err != nil {
+		t.Fatalf("upsert installation: %v", err)
+	}
+	if err := st.AddInstallationRepo("inst1", "o/r"); err != nil {
+		t.Fatalf("add installation repo: %v", err)
+	}
 
 	sseHub := sse.New()
 	engine := settle.New(st, sseHub, grace)
