@@ -41,7 +41,7 @@ jobs:
       - run: go vet ./...
 
   test:
-    name: Test
+    name: Test (unit)
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "1" # -race requires cgo; overrides the cgo-free build default
@@ -51,12 +51,41 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - name: Test with coverage
-        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+      - name: Unit tests with coverage
+        # Every package except internal/server (the end-to-end suite, run by the
+        # integration job below). -coverpkg=./... still attributes coverage
+        # across all packages so the unit flag reflects what unit tests reach.
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out $(go list ./... | grep -v '/internal/server$')
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: ravencloak-org/caw
+          fail_ci_if_error: false
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1" # -race requires cgo; overrides the cgo-free build default
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Integration tests with coverage
+        # internal/server holds the end-to-end tests: each spins up the full Hub
+        # over httptest and drives webhook -> settle -> SSE / pending / orphan
+        # rebase / lease, stubbing only GitHub REST and the git CLI.
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./internal/server/
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage-integration.out
+          flags: integration
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: ravencloak-org/caw
           fail_ci_if_error: false
