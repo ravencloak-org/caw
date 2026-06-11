@@ -1,6 +1,7 @@
 package settle
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"sync"
@@ -192,3 +193,102 @@ var errTest = errTestType("poll failed")
 type errTestType string
 
 func (e errTestType) Error() string { return string(e) }
+
+// ---------------------------------------------------------------------------
+// OrphanRebaseHandler tests
+// ---------------------------------------------------------------------------
+
+// concreteOrphanHandler implements OrphanRebaseHandler for testing.
+type concreteOrphanHandler struct {
+	mu    sync.Mutex
+	calls []orphanCall
+}
+
+type orphanCall struct {
+	owner, repo string
+	number      int
+	sha         string
+}
+
+func (f *concreteOrphanHandler) TriggerOrphanRebase(_ context.Context, owner, repo string, number int, sha string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, orphanCall{owner, repo, number, sha})
+	return nil
+}
+
+func (f *concreteOrphanHandler) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+func (f *concreteOrphanHandler) firstCall() orphanCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return orphanCall{}
+	}
+	return f.calls[0]
+}
+
+func TestOrphanHandler_InvokedWhenBehindBaseAndNoSubscribers(t *testing.T) {
+	st := newStore(t)
+	pub := &fakePub{count: 0} // fanOut=0 simulates no live subscribers
+	fp := fakePoller{
+		sig: store.Signal{SignalType: "mergeability", Source: "poll", ExternalID: "mergeability", Body: "behind base", Severity: "MINOR"},
+		ok:  true,
+	}
+	handler := &concreteOrphanHandler{}
+	e := New(st, pub, time.Millisecond, WithPoller(fp), WithOrphanRebaseHandler(handler))
+	e.FireNow("o", "r", 1, "sha1")
+	if n := handler.callCount(); n != 1 {
+		t.Fatalf("orphan handler called %d times, want 1", n)
+	}
+	c := handler.firstCall()
+	if c.owner != "o" || c.repo != "r" || c.number != 1 || c.sha != "sha1" {
+		t.Errorf("unexpected call args: %+v", c)
+	}
+}
+
+func TestOrphanHandler_NotInvokedWhenSubscribersExist(t *testing.T) {
+	st := newStore(t)
+	pub := &fakePub{count: 2} // live subscribers
+	fp := fakePoller{
+		sig: store.Signal{SignalType: "mergeability", Source: "poll", ExternalID: "mergeability", Body: "behind base", Severity: "MINOR"},
+		ok:  true,
+	}
+	handler := &concreteOrphanHandler{}
+	e := New(st, pub, time.Millisecond, WithPoller(fp), WithOrphanRebaseHandler(handler))
+	e.FireNow("o", "r", 2, "sha2")
+	if n := handler.callCount(); n != 0 {
+		t.Fatalf("orphan handler should not be called with live subscribers; got %d calls", n)
+	}
+}
+
+func TestOrphanHandler_NotInvokedWhenNotBehindBase(t *testing.T) {
+	st := newStore(t)
+	pub := &fakePub{count: 0}
+	fp := fakePoller{
+		sig: store.Signal{SignalType: "mergeability", Source: "poll", ExternalID: "mergeability", Body: "clean"},
+		ok:  true,
+	}
+	handler := &concreteOrphanHandler{}
+	e := New(st, pub, time.Millisecond, WithPoller(fp), WithOrphanRebaseHandler(handler))
+	e.FireNow("o", "r", 3, "sha3")
+	if n := handler.callCount(); n != 0 {
+		t.Fatalf("orphan handler should not be called for clean PR; got %d calls", n)
+	}
+}
+
+func TestOrphanHandler_NotInvokedWhenNilHandler(t *testing.T) {
+	st := newStore(t)
+	pub := &fakePub{count: 0}
+	fp := fakePoller{
+		sig: store.Signal{SignalType: "mergeability", Source: "poll", ExternalID: "mergeability", Body: "behind base"},
+		ok:  true,
+	}
+	// no WithOrphanRebaseHandler — must not panic
+	e := New(st, pub, time.Millisecond, WithPoller(fp))
+	e.FireNow("o", "r", 4, "sha4") // must not panic
+}

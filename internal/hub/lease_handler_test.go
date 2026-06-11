@@ -215,3 +215,246 @@ func TestHandleAcquireLease_IsolatedByPR(t *testing.T) {
 		t.Fatalf("status PR5=%d PR6=%d, want 200 both", w1.Code, w2.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Helpers shared by renew and release tests
+// ---------------------------------------------------------------------------
+
+// renewHarness returns a router with POST acquire + PUT heartbeat + DELETE release,
+// all wired with the given holder identity.
+func renewHarness(t *testing.T, holder string) (*gin.Engine, *store.Store) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "renew.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	h := New(st, []byte("secret"), nil)
+	r := gin.New()
+	inject := func(c *gin.Context) {
+		c.Set(auth.ContextInstallationID, holder)
+		c.Next()
+	}
+	r.POST("/leases/:owner/:repo/:number", inject, h.HandleAcquireLease)
+	r.PUT("/leases/:owner/:repo/:number/heartbeat", inject, h.HandleRenewLease)
+	r.DELETE("/leases/:owner/:repo/:number", inject, h.HandleReleaseLease)
+	return r, st
+}
+
+// renewHarnessMulti returns a router supporting two holder identities, routed
+// by a query param ?as=<holder> — used to test access control across holders.
+func renewHarnessMulti(t *testing.T) (*gin.Engine, *store.Store) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "multi.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	h := New(st, []byte("secret"), nil)
+	r := gin.New()
+
+	injectFromQuery := func(c *gin.Context) {
+		id := c.Query("as")
+		if id == "" {
+			id = "inst-A"
+		}
+		c.Set(auth.ContextInstallationID, id)
+		c.Next()
+	}
+	r.POST("/leases/:owner/:repo/:number", injectFromQuery, h.HandleAcquireLease)
+	r.PUT("/leases/:owner/:repo/:number/heartbeat", injectFromQuery, h.HandleRenewLease)
+	r.DELETE("/leases/:owner/:repo/:number", injectFromQuery, h.HandleReleaseLease)
+	return r, st
+}
+
+func doRenewRequest(r *gin.Engine, owner, repo, number, holder string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPut, "/leases/"+owner+"/"+repo+"/"+number+"/heartbeat?as="+holder, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func doReleaseRequest(r *gin.Engine, owner, repo, number, holder string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodDelete, "/leases/"+owner+"/"+repo+"/"+number+"?as="+holder, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// ---------------------------------------------------------------------------
+// HandleRenewLease
+// ---------------------------------------------------------------------------
+
+func TestHandleRenewLease_HolderGets200(t *testing.T) {
+	r, _ := renewHarness(t, "inst-A")
+	// Acquire first.
+	w := doLeaseRequest(r, "org", "repo", "10")
+	if w.Code != http.StatusOK {
+		t.Fatalf("acquire: status %d", w.Code)
+	}
+
+	// Renew.
+	req := httptest.NewRequest(http.MethodPut, "/leases/org/repo/10/heartbeat", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+
+	if wr.Code != http.StatusOK {
+		t.Fatalf("renew: status = %d, want 200; body=%q", wr.Code, wr.Body.String())
+	}
+	var resp leaseResp
+	if err := json.NewDecoder(wr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode renew response: %v", err)
+	}
+	if !resp.Granted {
+		t.Fatal("expected granted=true in renew response")
+	}
+	if resp.Holder != "inst-A" {
+		t.Fatalf("holder = %q, want inst-A", resp.Holder)
+	}
+}
+
+func TestHandleRenewLease_WrongHolderGets409(t *testing.T) {
+	r, _ := renewHarnessMulti(t)
+
+	// inst-A acquires.
+	req := httptest.NewRequest(http.MethodPost, "/leases/org/repo/11?as=inst-A", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("acquire: status %d", w.Code)
+	}
+
+	// inst-B tries to renew.
+	wr := doRenewRequest(r, "org", "repo", "11", "inst-B")
+	if wr.Code != http.StatusConflict {
+		t.Fatalf("wrong holder renew: status = %d, want 409; body=%q", wr.Code, wr.Body.String())
+	}
+}
+
+func TestHandleRenewLease_NoLease_409(t *testing.T) {
+	r, _ := renewHarness(t, "inst-A")
+	// Renew without acquiring.
+	req := httptest.NewRequest(http.MethodPut, "/leases/org/repo/99/heartbeat", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+	if wr.Code != http.StatusConflict {
+		t.Fatalf("renew without lease: status = %d, want 409; body=%q", wr.Code, wr.Body.String())
+	}
+}
+
+func TestHandleRenewLease_InvalidNumber_400(t *testing.T) {
+	r, _ := renewHarness(t, "inst-A")
+	req := httptest.NewRequest(http.MethodPut, "/leases/org/repo/notanumber/heartbeat", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+	if wr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid number: status = %d, want 400", wr.Code)
+	}
+}
+
+func TestHandleRenewLease_MissingInstallationID_401(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "noauth2.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	h := New(st, []byte("secret"), nil)
+	r := gin.New()
+	r.PUT("/leases/:owner/:repo/:number/heartbeat", h.HandleRenewLease)
+
+	req := httptest.NewRequest(http.MethodPut, "/leases/org/repo/1/heartbeat", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+	if wr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", wr.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleReleaseLease
+// ---------------------------------------------------------------------------
+
+func TestHandleReleaseLease_HolderGets204(t *testing.T) {
+	r, st := renewHarness(t, "inst-A")
+
+	// Acquire.
+	w := doLeaseRequest(r, "org", "repo", "20")
+	if w.Code != http.StatusOK {
+		t.Fatalf("acquire: status %d", w.Code)
+	}
+
+	// Release.
+	req := httptest.NewRequest(http.MethodDelete, "/leases/org/repo/20", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+	if wr.Code != http.StatusNoContent {
+		t.Fatalf("release: status = %d, want 204; body=%q", wr.Code, wr.Body.String())
+	}
+
+	// Lease should be gone.
+	_, ok, err := st.GetLease("org", "repo", 20)
+	if err != nil {
+		t.Fatalf("GetLease: %v", err)
+	}
+	if ok {
+		t.Fatal("expected lease to be deleted after release")
+	}
+}
+
+func TestHandleReleaseLease_WrongHolderGets409(t *testing.T) {
+	r, _ := renewHarnessMulti(t)
+
+	// inst-A acquires.
+	req := httptest.NewRequest(http.MethodPost, "/leases/org/repo/21?as=inst-A", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("acquire: status %d", w.Code)
+	}
+
+	// inst-B tries to release.
+	wr := doReleaseRequest(r, "org", "repo", "21", "inst-B")
+	if wr.Code != http.StatusConflict {
+		t.Fatalf("wrong holder release: status = %d, want 409; body=%q", wr.Code, wr.Body.String())
+	}
+}
+
+func TestHandleReleaseLease_NoLease_409(t *testing.T) {
+	r, _ := renewHarness(t, "inst-A")
+	req := httptest.NewRequest(http.MethodDelete, "/leases/org/repo/999", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+	if wr.Code != http.StatusConflict {
+		t.Fatalf("release non-existent: status = %d, want 409", wr.Code)
+	}
+}
+
+func TestHandleReleaseLease_InvalidNumber_400(t *testing.T) {
+	r, _ := renewHarness(t, "inst-A")
+	req := httptest.NewRequest(http.MethodDelete, "/leases/org/repo/notanumber", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+	if wr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid number: status = %d, want 400", wr.Code)
+	}
+}
+
+func TestHandleReleaseLease_MissingInstallationID_401(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "noauth3.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	h := New(st, []byte("secret"), nil)
+	r := gin.New()
+	r.DELETE("/leases/:owner/:repo/:number", h.HandleReleaseLease)
+
+	req := httptest.NewRequest(http.MethodDelete, "/leases/org/repo/1", nil)
+	wr := httptest.NewRecorder()
+	r.ServeHTTP(wr, req)
+	if wr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", wr.Code)
+	}
+}

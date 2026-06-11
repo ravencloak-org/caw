@@ -43,6 +43,8 @@ func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte,
 	r.GET("/pending", authMW, h.HandlePending)
 	r.GET("/sse/:owner/:repo/:number", authMW, scopeMW, sseHub.Handler(sseKey))
 	r.POST("/leases/:owner/:repo/:number", authMW, scopeMW, h.HandleAcquireLease)
+	r.PUT("/leases/:owner/:repo/:number/heartbeat", authMW, scopeMW, h.HandleRenewLease)
+	r.DELETE("/leases/:owner/:repo/:number", authMW, scopeMW, h.HandleReleaseLease)
 
 	return r
 }

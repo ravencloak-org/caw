@@ -1,14 +1,16 @@
 // Command watcher is the Caw Watcher: an MCP (Model Context Protocol) server
 // that an agent drives over stdio. It bridges the agent to a running Hub,
-// exposing three tools (Slice 4, ADR-0005/0006):
+// exposing six tools (Slice 4 + Slice 6, ADR-0005/0006):
 //
-//   - subscribe_pr         — open an SSE stream for one PR and return the
+//   - subscribe_pr          — open an SSE stream for one PR and return the
 //     compiled summaries received within a bounded window, rendered with
 //     accessible severity symbols (via internal/severity).
-//   - get_pending          — one-shot fetch of every current Pending item.
-//   - acquire_rebase_lease — request a force-push lease from the Hub (ADR-0005).
-//     Rebase EXECUTION, heartbeat-during-rebase, and orphan fallback are
-//     Slice 6 — explicitly OUT OF SCOPE here. See TODO(#6) below.
+//   - get_pending           — one-shot fetch of every current Pending item.
+//   - acquire_rebase_lease  — request a force-push lease from the Hub (ADR-0005).
+//   - renew_rebase_lease    — heartbeat an active lease to prevent expiry (ADR-0005).
+//   - release_rebase_lease  — release the lease when the agent is done.
+//   - rebase_pr             — perform the full rebase with heartbeat under an
+//     already-acquired lease (Slice 6, ADR-0002/0005).
 //
 // Auth: every Hub call carries the Hub-minted installation token (ADR-0003),
 // read from the environment (CAW_WATCHER_HUB_URL / CAW_WATCHER_TOKEN).
@@ -29,6 +31,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ravencloak-org/caw/internal/rebase"
 	"github.com/ravencloak-org/caw/internal/watcher"
 )
 
@@ -88,8 +91,28 @@ func newServer(client *watcher.Client) *mcp.Server {
 		Name: "acquire_rebase_lease",
 		Description: "Request the single-owner force-push lease for a PR (ADR-0005). " +
 			"Returns whether the lease was granted and who currently holds it. " +
-			"Does NOT perform the rebase itself.",
+			"Call rebase_pr after a successful acquire to perform the rebase.",
 	}, makeAcquireRebaseLease(client))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "renew_rebase_lease",
+		Description: "Send a heartbeat to extend an active force-push lease (ADR-0005). " +
+			"Call every ~30 s while a long-running rebase is in progress to prevent expiry.",
+	}, makeRenewRebaseLease(client))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "release_rebase_lease",
+		Description: "Release the force-push lease when the rebase is complete or aborted (ADR-0005). " +
+			"Always call this when done, even after an error.",
+	}, makeReleaseRebaseLease(client))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "rebase_pr",
+		Description: "Perform the full rebase sequence (fetch / rebase / force-push) for a PR " +
+			"under an already-acquired Hub lease, with automatic heartbeats every 30 s (Slice 6, ADR-0002). " +
+			"Requires owner, repo, number, sha (HEAD commit), branch, remote, base, and holder (lease holder ID). " +
+			"The git repository must be checked out in the directory specified by repo_dir.",
+	}, makeRebasePR(client))
 
 	// SessionStart reminder surfaced as an MCP prompt the agent can fetch. The
 	// Claude Code harness also fires a SessionStart hook (.claude/settings.json)
@@ -128,6 +151,33 @@ type subscribeOutput struct {
 // leaseOutput is the structured result of acquire_rebase_lease.
 type leaseOutput struct {
 	watcher.LeaseResult
+}
+
+// leaseHolderInput carries the lease-holder identity for renew / release.
+type leaseHolderInput struct {
+	Owner  string `json:"owner" jsonschema:"the repository owner / org login"`
+	Repo   string `json:"repo" jsonschema:"the repository name"`
+	Number int    `json:"number" jsonschema:"the pull request number"`
+	Holder string `json:"holder" jsonschema:"the lease holder ID returned by acquire_rebase_lease"`
+}
+
+// rebasePRInput is the full input for rebase_pr.
+type rebasePRInput struct {
+	Owner   string `json:"owner" jsonschema:"the repository owner / org login"`
+	Repo    string `json:"repo" jsonschema:"the repository name"`
+	Number  int    `json:"number" jsonschema:"the pull request number"`
+	SHA     string `json:"sha" jsonschema:"the HEAD commit SHA being rebased"`
+	Branch  string `json:"branch" jsonschema:"local branch name (e.g. 'feature/my-pr')"`
+	Remote  string `json:"remote" jsonschema:"git remote name (usually 'origin')"`
+	Base    string `json:"base" jsonschema:"upstream ref to rebase onto (e.g. 'origin/main')"`
+	Holder  string `json:"holder" jsonschema:"the lease holder ID returned by acquire_rebase_lease"`
+	RepoDir string `json:"repo_dir" jsonschema:"absolute path to the local git repository"`
+}
+
+// rebasePROutput is the structured result of rebase_pr.
+type rebasePROutput struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
 }
 
 // --- tool handlers ---
@@ -177,14 +227,96 @@ func makeAcquireRebaseLease(client *watcher.Client) mcp.ToolHandlerFor[prRef, le
 		if err != nil {
 			return nil, leaseOutput{}, fmt.Errorf("acquire_rebase_lease: %w", err)
 		}
-		// TODO(#6): Slice 6 owns rebase EXECUTION, heartbeat-during-rebase, and
-		// orphan fallback. This tool only secures the lease; once granted, the
-		// agent must NOT yet attempt a force-push from here.
 		out := leaseOutput{LeaseResult: res}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: renderLease(in, res)}},
 		}, out, nil
 	}
+}
+
+func makeRenewRebaseLease(client *watcher.Client) mcp.ToolHandlerFor[leaseHolderInput, leaseOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in leaseHolderInput) (*mcp.CallToolResult, leaseOutput, error) {
+		// watcher.Client.RenewRebaseLease returns (LeaseResult, error).
+		// We surface both in the output, but only return an error on failure.
+		res, err := client.RenewRebaseLease(ctx, in.Owner, in.Repo, in.Number, in.Holder)
+		if err != nil {
+			return nil, leaseOutput{}, fmt.Errorf("renew_rebase_lease: %w", err)
+		}
+		out := leaseOutput{LeaseResult: res}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{
+				Text: fmt.Sprintf("Lease renewed for %s/%s#%d (holder=%s)", in.Owner, in.Repo, in.Number, in.Holder),
+			}},
+		}, out, nil
+	}
+}
+
+func makeReleaseRebaseLease(client *watcher.Client) mcp.ToolHandlerFor[leaseHolderInput, leaseOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in leaseHolderInput) (*mcp.CallToolResult, leaseOutput, error) {
+		if err := client.ReleaseRebaseLease(ctx, in.Owner, in.Repo, in.Number, in.Holder); err != nil {
+			return nil, leaseOutput{}, fmt.Errorf("release_rebase_lease: %w", err)
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{
+				Text: fmt.Sprintf("Lease released for %s/%s#%d (holder=%s)", in.Owner, in.Repo, in.Number, in.Holder),
+			}},
+		}, leaseOutput{}, nil
+	}
+}
+
+func makeRebasePR(client *watcher.Client) mcp.ToolHandlerFor[rebasePRInput, rebasePROutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in rebasePRInput) (*mcp.CallToolResult, rebasePROutput, error) {
+		cfg := rebase.Config{
+			Owner:  in.Owner,
+			Repo:   in.Repo,
+			Number: in.Number,
+			SHA:    in.SHA,
+			Branch: in.Branch,
+			Remote: in.Remote,
+			Base:   in.Base,
+			Holder: in.Holder,
+		}
+
+		// Thin adapter: watcher.Client.RenewRebaseLease returns (LeaseResult, error)
+		// but rebase.LeaseRenewer requires only error. Wrap it here to satisfy the
+		// interface without modifying either package.
+		renewer := &clientLeaseAdapter{client: client}
+
+		runner := rebase.NewExecRunner(in.RepoDir)
+		session := rebase.NewSession(runner, renewer)
+
+		if err := session.Run(ctx, cfg); err != nil {
+			out := rebasePROutput{Success: false, Message: err.Error()}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{
+					Text: fmt.Sprintf("Rebase failed for %s/%s#%d: %v", in.Owner, in.Repo, in.Number, err),
+				}},
+			}, out, err
+		}
+
+		out := rebasePROutput{Success: true, Message: "rebase complete"}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{
+				Text: fmt.Sprintf("Rebase complete for %s/%s#%d", in.Owner, in.Repo, in.Number),
+			}},
+		}, out, nil
+	}
+}
+
+// clientLeaseAdapter adapts *watcher.Client to rebase.LeaseRenewer.
+// watcher.Client.RenewRebaseLease returns (LeaseResult, error); the interface
+// only needs error.
+type clientLeaseAdapter struct {
+	client *watcher.Client
+}
+
+func (a *clientLeaseAdapter) RenewRebaseLease(ctx context.Context, owner, repo string, number int, holder string) error {
+	_, err := a.client.RenewRebaseLease(ctx, owner, repo, number, holder)
+	return err
+}
+
+func (a *clientLeaseAdapter) ReleaseRebaseLease(ctx context.Context, owner, repo string, number int, holder string) error {
+	return a.client.ReleaseRebaseLease(ctx, owner, repo, number, holder)
 }
 
 // sessionStartPrompt returns the canned reminder to check pending PRs.
