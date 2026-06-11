@@ -16,4 +16,5 @@ entities.json
 
 # Coverage
 coverage.out
+coverage-integration.out
 coverage.html

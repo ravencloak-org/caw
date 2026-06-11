@@ -35,7 +35,11 @@ var checkSuiteFailure = []byte(`{
 	"repository":{"name":"r","owner":{"login":"o"}}
 }`)
 
-func newTestServer(t *testing.T, grace time.Duration) (*httptest.Server, string) {
+// newTestServerOpts builds the full Hub server on a temp SQLite store with one
+// installation (inst1/org1) scoped to repo o/r and a valid token. optsFn, when
+// non-nil, receives the store and returns the settle options to wire (poller,
+// orphan handler, …) so e2e tests can inject GitHub-API-backed behavior.
+func newTestServerOpts(t *testing.T, grace time.Duration, optsFn func(*store.Store) []settle.Option) (*httptest.Server, string, *store.Store) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "it.db"))
 	if err != nil {
@@ -61,9 +65,18 @@ func newTestServer(t *testing.T, grace time.Duration) (*httptest.Server, string)
 	}
 
 	sseHub := sse.New()
-	engine := settle.New(st, sseHub, grace)
+	var opts []settle.Option
+	if optsFn != nil {
+		opts = optsFn(st)
+	}
+	engine := settle.New(st, sseHub, grace, opts...)
 	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil))
 	t.Cleanup(ts.Close)
+	return ts, raw, st
+}
+
+func newTestServer(t *testing.T, grace time.Duration) (*httptest.Server, string) {
+	ts, raw, _ := newTestServerOpts(t, grace, nil)
 	return ts, raw
 }
 

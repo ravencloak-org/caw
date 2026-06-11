@@ -13,6 +13,16 @@ coverage:
 ignore:
   - "cmd/hub/main.go"
 
+# Coverage is uploaded under two flags from two CI jobs (see .github/workflows/ci.yml):
+#   unit        — every package except internal/server
+#   integration — internal/server end-to-end suite
+# carryforward keeps a flag's last result if its job is skipped on a given run.
+flags:
+  unit:
+    carryforward: true
+  integration:
+    carryforward: true
+
 comment:
   layout: "reach, diff, flags, files"
   require_changes: true
