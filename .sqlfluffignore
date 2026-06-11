@@ -1,0 +1,6 @@
+# db/ holds the Dolt schema source in MySQL dialect — it is NOT linted.
+# SQLFluff only lints the generated dialect files (internal/store/schema.sql is
+# sqlite per the root .sqlfluff; internal/store/postgres/schema.sql is postgres
+# per its nested .sqlfluff). The MySQL source would always fail under those
+# dialects, so the whole db/ tree is excluded.
+db/

@@ -1,0 +1,17 @@
+# SQLFluff override for Postgres DDL.
+# Inherits settings from the root .sqlfluff; dialect and exclude_rules are
+# overridden here (nearest config wins, values are not merged).
+[sqlfluff]
+dialect = postgres
+max_line_length = 120
+
+# layout.spacing (LT01): our DDL is intentionally column-aligned for readability.
+# postgres.excessive_locks (PG01): demands CREATE INDEX ... CONCURRENTLY, which
+#   is invalid inside the single-transaction bootstrap this file represents.
+exclude_rules = layout.spacing, postgres.excessive_locks
+
+# Columns named event/owner/summary collide with Postgres keywords, so the
+# generator double-quotes them. Tell RF06 (references.quoting) that quoting
+# keywords is intentional, otherwise it flags the quotes as "unnecessary".
+[sqlfluff:rules:references.quoting]
+prefer_quoted_keywords = True

@@ -1,6 +1,10 @@
-.PHONY: build hub watcher test lint run tidy clean
+.PHONY: build hub watcher test lint run tidy clean schema
 
 build: hub watcher
+
+schema:
+	bash scripts/gen-schema.sh
+
 
 hub:
 	CGO_ENABLED=0 go build -o bin/hub ./cmd/hub
