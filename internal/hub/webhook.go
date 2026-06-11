@@ -50,6 +50,24 @@ func (h *Hub) WithMintFunc(fn func(installationID, org string) (string, error)) 
 	return h
 }
 
+// effectiveWebhookSecret returns the secret used to verify webhook signatures.
+// A GitHub App provisioned via the manifest flow (Slice 5) carries its own
+// webhook secret in app_credentials; prefer it so App deliveries verify without
+// the operator mirroring CAW_GH_WEBHOOK_SECRET into the App config. Fall back to
+// the static secret (CAW_GH_WEBHOOK_SECRET) until App credentials exist. A store
+// failure is propagated, not swallowed, so the caller fails closed rather than
+// verifying under an unintended secret.
+func (h *Hub) effectiveWebhookSecret() ([]byte, error) {
+	creds, ok, err := h.store.LoadAppCredentials()
+	if err != nil {
+		return nil, fmt.Errorf("load app credentials: %w", err)
+	}
+	if ok && creds.WebhookSecret != "" {
+		return []byte(creds.WebhookSecret), nil
+	}
+	return h.secret, nil
+}
+
 // VerifySignature reports whether sigHeader ("sha256=<hex>") is a valid
 // HMAC-SHA256 of payload under secret. The comparison is constant-time.
 func VerifySignature(secret, payload []byte, sigHeader string) bool {
@@ -85,7 +103,15 @@ func (h *Hub) HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	sigOK := len(h.secret) > 0 && VerifySignature(h.secret, body, c.GetHeader("X-Hub-Signature-256"))
+	secret, err := h.effectiveWebhookSecret()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "load webhook secret")
+		log.Printf("webhook secret: %v", err)
+		c.String(http.StatusInternalServerError, "signature verification unavailable")
+		return
+	}
+	sigOK := len(secret) > 0 && VerifySignature(secret, body, c.GetHeader("X-Hub-Signature-256"))
 	span.SetAttributes(attribute.Bool("webhook.sig_ok", sigOK))
 	if !sigOK {
 		span.SetStatus(codes.Error, "invalid signature")

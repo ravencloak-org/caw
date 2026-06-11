@@ -92,8 +92,9 @@ func NewManifestHandler(cfg ManifestConfig) (*ManifestHandler, error) {
 		"redirect_url": callbackURL,
 		"public":       false,
 		"default_permissions": map[string]any{
-			"pull_requests": "read",
+			"pull_requests": "write", // read PR state + enable auto-merge (ADR-0002)
 			"checks":        "read",
+			"contents":      "write", // force-push rebased commits during orphan rebase
 		},
 		"default_events": []string{
 			"check_suite",
