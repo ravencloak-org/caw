@@ -34,7 +34,7 @@ jobs:
     # committed dialect files (see db/README.md). Bumping this requires
     # rerunning `make schema` with the same version and committing the result.
     env:
-      DOLT_VERSION: "2.1.2"
+      DOLT_VERSION: "2.1.4"
     steps:
       - uses: actions/checkout@v6
         with:
