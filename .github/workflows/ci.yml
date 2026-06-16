@@ -57,7 +57,7 @@ jobs:
         # across all packages so the unit flag reflects what unit tests reach.
         run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out $(go list ./... | grep -v '/internal/server$')
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage.out
           flags: unit
@@ -82,7 +82,7 @@ jobs:
         # rebase / lease, stubbing only GitHub REST and the git CLI.
         run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./internal/server/
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage-integration.out
           flags: integration
