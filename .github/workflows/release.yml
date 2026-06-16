@@ -1,5 +1,16 @@
 name: Release
 
+# Build and push the caw image to GHCR on a semver tag, then trigger a
+# Dokploy redeploy via webhook so production rolls forward.
+#
+# Trigger: pushing `vX.Y.Z` (e.g. `git tag v0.2.0 && git push --tags`).
+# No tag = no ship. Keeps releases deliberate; commits on `main` still flow
+# through CI but don't auto-deploy.
+#
+# The Dokploy compose pins `ghcr.io/ravencloak-org/caw:latest` with
+# `pull_policy: always`, so a fresh `:latest` push is what makes the
+# webhook-driven `docker compose up -d` actually pull new code.
+
 on:
   push:
     tags:
@@ -45,3 +56,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trigger Dokploy redeploy
+        # POSTs the compose-service webhook. Dokploy responds with the
+        # queued deployment id; it does NOT block on container start.
+        # The compose is configured with `pull_policy: always`, so the
+        # ensuing `docker compose up -d` pulls the `:latest` tag we just
+        # pushed and recreates the hub container.
+        env:
+          WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK_URL }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::DOKPLOY_WEBHOOK_URL secret unset; skipping redeploy."
+            exit 0
+          fi
+          status=$(curl -sS -o /tmp/dokploy-resp -w '%{http_code}' -X POST "$WEBHOOK")
+          echo "Dokploy webhook HTTP $status"
+          cat /tmp/dokploy-resp || true
+          # Surface any 4xx/5xx as a job failure so the Actions UI reflects
+          # whether the deploy was actually queued.
+          test "$status" -ge 200 && test "$status" -lt 300
