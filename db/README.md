@@ -20,11 +20,11 @@ Or download from https://github.com/dolthub/dolt/releases.
 
 `dolt schema export` formatting can differ between releases, which would make
 the generated dialect files non-reproducible. The version is therefore pinned
-to **2.1.2** in `.github/workflows/sql.yml` (`DOLT_VERSION`). The committed
+to **2.1.4** in `.github/workflows/sql.yml` (`DOLT_VERSION`). The committed
 files in `internal/store/` were generated with this version.
 
 If you regenerate with a different version and CI's drift gate fails, either
-install dolt 2.1.2 locally or bump `DOLT_VERSION` in the workflow **and**
+install dolt 2.1.4 locally or bump `DOLT_VERSION` in the workflow **and**
 regenerate + commit with that same version. Keep local and CI versions
 identical.
 
