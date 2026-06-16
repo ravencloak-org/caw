@@ -26,6 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave a writable token in the local git config for later
+          # steps; build/push uses its own scoped GHCR token, and webhook
+          # uses a separately-scoped Dokploy URL.
+          persist-credentials: false
 
       - uses: docker/setup-qemu-action@v4
 
