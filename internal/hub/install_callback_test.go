@@ -341,3 +341,85 @@ func TestInstallCallback_MintFails(t *testing.T) {
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
 }
+
+func TestNewInstallCallbackHandler_EmptyBaseURL(t *testing.T) {
+	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		CredsFn: func() (string, string, bool, error) { return "id", "sec", true, nil },
+		MintFn:  func(string, string) (string, error) { return "tok", nil },
+	})
+	if err == nil {
+		t.Fatal("want error for empty BaseURL")
+	}
+	if !strings.Contains(err.Error(), "BaseURL") {
+		t.Errorf("error = %v, want mention of BaseURL", err)
+	}
+}
+
+func TestNewInstallCallbackHandler_NilCredsFn(t *testing.T) {
+	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		BaseURL: "http://h.example",
+		MintFn:  func(string, string) (string, error) { return "tok", nil },
+	})
+	if err == nil {
+		t.Fatal("want error for nil CredsFn")
+	}
+	if !strings.Contains(err.Error(), "CredsFn") {
+		t.Errorf("error = %v, want mention of CredsFn", err)
+	}
+}
+
+func TestNewInstallCallbackHandler_NilMintFn(t *testing.T) {
+	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		BaseURL: "http://h.example",
+		CredsFn: func() (string, string, bool, error) { return "id", "sec", true, nil },
+	})
+	if err == nil {
+		t.Fatal("want error for nil MintFn")
+	}
+	if !strings.Contains(err.Error(), "MintFn") {
+		t.Errorf("error = %v, want mention of MintFn", err)
+	}
+}
+
+// fakeGitHubAuthMalformed is a separate stub because fakeGitHubAuth
+// always JSON-encodes its installations body; we need to inject raw
+// garbage for the installations decode-error branch.
+func TestInstallCallback_InstallationsMalformedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login/oauth/access_token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"t"}`))
+		case "/user/installations":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`not json at all`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	st := newTestStore(t)
+	credsFn := func() (string, string, bool, error) { return "id", "sec", true, nil }
+	mintFn := func(installationID, org string) (string, error) {
+		return "raw-watcher-token-XYZ", st.InsertToken(auth.HashToken("raw-watcher-token-XYZ"), installationID, org)
+	}
+	h, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		BaseURL:    "http://hub.example.com",
+		GithubBase: srv.URL,
+		APIBase:    srv.URL,
+		CredsFn:    credsFn,
+		MintFn:     mintFn,
+	})
+	if err != nil {
+		t.Fatalf("NewInstallCallbackHandler: %v", err)
+	}
+	r := gin.New()
+	r.GET("/github/app/install/callback", h.Handle)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("123", "install", "code"))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
+	}
+}
