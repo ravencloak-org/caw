@@ -890,3 +890,139 @@ func TestAuthDevice_CredsMissingReturns424(t *testing.T) {
 		t.Errorf("status = %d, want 424 FailedDependency; body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+// ── HandleGithubCallback error branches ──────────────────────────────────
+// HandleStart / HandleBrowserStart / HandleGithubCallback happy paths are
+// already covered. These tests target the early-rejection branches that
+// would otherwise rot uncovered.
+
+func TestAuthCallback_MissingState(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/cb/github?code=ignored", nil)
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Missing state") {
+		t.Errorf("body missing 'Missing state' error: %s", rr.Body.String())
+	}
+}
+
+func TestAuthCallback_MissingSessionCookie(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/cb/github?state=anything&code=anything", nil)
+	// No cookie attached → should 400.
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Missing session cookie") {
+		t.Errorf("body missing cookie error: %s", rr.Body.String())
+	}
+}
+
+func TestAuthCallback_StateCookieMismatch_IsCSRF(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/cb/github?state=attacker&code=anything", nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "different-session"})
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "CSRF") {
+		t.Errorf("body missing CSRF error: %s", rr.Body.String())
+	}
+}
+
+func TestAuthCallback_SessionNotFound(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/cb/github?state=ghost-session&code=anything", nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "ghost-session"})
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAuthCallback_SessionExpired(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	now := time.Unix(s.now, 0)
+	if err := s.st.InsertAuthSession(store.AuthSession{
+		ID:                  "expired-cb",
+		HandshakeMode:       "loopback",
+		CodeChallenge:       "chal",
+		CodeChallengeMethod: "S256",
+		ClientLabel:         "test",
+		LoopbackRedirect:    "http://127.0.0.1:0/cb",
+		CreatedAt:           now.Add(-30 * time.Minute).Unix(),
+		ExpiresAt:           now.Add(-1 * time.Minute).Unix(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/cb/github?state=expired-cb&code=anything", nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "expired-cb"})
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusGone {
+		t.Errorf("status = %d, want 410 Gone; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAuthCallback_MissingCode(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	now := time.Unix(s.now, 0)
+	if err := s.st.InsertAuthSession(store.AuthSession{
+		ID:                  "live-cb",
+		HandshakeMode:       "loopback",
+		CodeChallenge:       "chal",
+		CodeChallengeMethod: "S256",
+		ClientLabel:         "test",
+		LoopbackRedirect:    "http://127.0.0.1:0/cb",
+		CreatedAt:           now.Unix(),
+		ExpiresAt:           now.Add(10 * time.Minute).Unix(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	// Valid state + cookie, but no `code` query param.
+	req := httptest.NewRequest(http.MethodGet, "/auth/cb/github?state=live-cb", nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "live-cb"})
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Missing code") {
+		t.Errorf("body missing 'Missing code' error: %s", rr.Body.String())
+	}
+}
+
+func TestAuthCallback_CredsMissingIs424(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	s.h.cfg.CredsFn = func() (string, string, bool, error) {
+		return "", "", false, nil
+	}
+	now := time.Unix(s.now, 0)
+	if err := s.st.InsertAuthSession(store.AuthSession{
+		ID:                  "nocreds-cb",
+		HandshakeMode:       "loopback",
+		CodeChallenge:       "chal",
+		CodeChallengeMethod: "S256",
+		ClientLabel:         "test",
+		LoopbackRedirect:    "http://127.0.0.1:0/cb",
+		CreatedAt:           now.Unix(),
+		ExpiresAt:           now.Add(10 * time.Minute).Unix(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/cb/github?state=nocreds-cb&code=any", nil)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "nocreds-cb"})
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFailedDependency {
+		t.Errorf("status = %d, want 424; body=%s", rr.Code, rr.Body.String())
+	}
+}
