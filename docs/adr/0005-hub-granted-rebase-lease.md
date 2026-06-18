@@ -26,3 +26,7 @@ A TTL+heartbeat is the **only** timer we keep, because a crashed lease-holder mi
 
 - **Let everyone rebase, rely on `git push --force-with-lease`:** rejected. It prevents *silent* overwrite (the second push fails if the ref moved), but it does not prevent wasteful concurrent rebases, leaves messy per-actor failure handling, and — critically — cannot coordinate the **Hub-vs-Session** orphan race, since they are different actors with independent local state. Hub-granted leasing solves all three.
 - **Listener self-elects (e.g. lowest session ID rebases):** rejected — requires every listener to know the full listener set and agree, which the fan-out model does not give them; the Hub already knows.
+
+## Known limitations
+
+> **Default image limitation — orphan rebase.** The published `ghcr.io/ravencloak-org/caw` image is distroless/static and does not include `git`. The orphan-rebase fallback (ADR-0005 — the Hub takes the lease and force-pushes when no agent is listening) requires `git` on PATH. If your workflow depends on orphan rebase, run the binary on a host with `git` installed rather than the default container, or build a custom image based on `alpine:3` with `git` + `bash` added. Live-path rebase (where the agent holds the lease and pushes from its own worktree, ADR-0002) is unaffected — that runs in the agent's environment, not in the Hub.

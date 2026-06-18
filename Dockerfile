@@ -23,6 +23,9 @@ RUN mkdir -p /data
 
 # ---- Final -----------------------------------------------------------------
 # distroless/static: no shell, no libc — just the static binary. nonroot user.
+# NOTE: distroless/static intentionally omits git. Orphan rebase
+# (internal/rebase/exec.go shells out to `git`) is therefore disabled
+# in this image. See README "Default image limitation" and ADR-0005.
 FROM gcr.io/distroless/static-debian12:nonroot
 
 WORKDIR /
