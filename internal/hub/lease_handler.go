@@ -22,7 +22,6 @@ const leaseTTL = int64(90)
 // The authenticated installation_id is extracted from context (set by auth.Required).
 // On success (lease granted) 200 is returned with the lease JSON.
 // On denial (another holder is active) 409 Conflict is returned.
-// Rebase EXECUTION, heartbeat-during-rebase, and orphan fallback are Slice 6 — TODO(#6).
 func (h *Hub) HandleAcquireLease(c *gin.Context) {
 	owner := c.Param("owner")
 	repo := c.Param("repo")
@@ -80,7 +79,6 @@ func (h *Hub) HandleAcquireLease(c *gin.Context) {
 		ExpiresAt       int64  `json:"expires_at"`
 		LastHeartbeatAt int64  `json:"last_heartbeat_at"`
 		AcquiredAt      int64  `json:"acquired_at"`
-		// TODO(#6): heartbeat endpoint for lease renewal during rebase execution.
 	}
 
 	resp := leaseResponse{

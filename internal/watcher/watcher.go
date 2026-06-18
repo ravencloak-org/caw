@@ -5,7 +5,7 @@
 //     delivering compiled summaries as they arrive (rendered via internal/severity).
 //   - get_pending    — one-shot fetch of all current Pending items from the Hub.
 //   - acquire_rebase_lease — requests a force-push lease from the Hub (ADR-0005);
-//     rebase execution and heartbeat are Slice 6 — TODO(#6).
+//     rebase execution and heartbeat are Slice 6.
 //
 // Auth: every Hub call carries the Hub-minted installation token (ADR-0003),
 // supplied via watcher config/env.
@@ -118,7 +118,7 @@ func (c *Client) GetPending(ctx context.Context) ([]PendingItem, error) {
 
 // AcquireRebaseLease requests a force-push lease for owner/repo#number from the Hub
 // (ADR-0005). Returns a LeaseResult regardless of grant/deny (caller checks Granted).
-// Rebase execution and heartbeat during rebase are Slice 6 — TODO(#6).
+// Rebase execution and heartbeat during rebase are Slice 6.
 func (c *Client) AcquireRebaseLease(ctx context.Context, owner, repo string, number int) (LeaseResult, error) {
 	path := fmt.Sprintf("/leases/%s/%s/%d", owner, repo, number)
 	req, err := c.newRequest(ctx, http.MethodPost, path)
