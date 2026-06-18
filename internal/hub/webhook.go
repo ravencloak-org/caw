@@ -34,8 +34,8 @@ const maxBody = 25 << 20
 type Hub struct {
 	store   *store.Store
 	secret  []byte
-	settler *settle.Engine                                   // may be nil (e.g. in unit tests of pure ingest)
-	mintFn  MintFunc // nil → no auto-minting
+	settler *settle.Engine // may be nil (e.g. in unit tests of pure ingest)
+	mintFn  MintFunc       // nil → no auto-minting
 }
 
 // New constructs a Hub. settler may be nil, in which case settles are not scheduled.
@@ -280,7 +280,7 @@ func (h *Hub) handleInstallation(env github.Envelope) error {
 			// Phase 1 widens to the new MintFunc shape but keeps the legacy
 			// "no user binding" semantics this path inherits from v0.1.x:
 			// userID=0 and deviceLabel="installation-auto" so the row is
-			// recognisable in audit logs and Phase 5 can safely sunset it.
+			// recognizable in audit logs and Phase 5 can safely sunset it.
 			if _, _, err := h.mintFn(installID, org, "installation-auto", 0, ""); err != nil {
 				// Non-fatal: log but do not fail the webhook; token can be minted later.
 				log.Printf("mint token for installation %s: %v", installID, err)

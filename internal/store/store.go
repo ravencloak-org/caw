@@ -399,10 +399,10 @@ func (s *Store) InsertToken(tokenHash, installationID, org string) error {
 // new token rows (Phase 3+) set them, legacy rows leave both NULL and remain
 // usable.
 //
-// Legacy backfill: rows that pre-date the Auth v2 `id` column carry id = ''.
+// Legacy backfill: rows that pre-date the Auth v2 `id` column carry id = ”.
 // First read populates id with "legacy-<rowid>" so downstream code (e.g.
 // RevokeToken, ListTokensForUser) always has a stable identifier. Idempotent:
-// the UPDATE is guarded on id IS NULL OR id = '' so re-reads are no-ops.
+// the UPDATE is guarded on id IS NULL OR id = ” so re-reads are no-ops.
 func (s *Store) VerifyToken(tokenHash string) (Token, bool, error) {
 	var t Token
 	var rowid int64

@@ -21,7 +21,7 @@ import (
 // store layer converts to/from SQL NULL on the wire.
 type AuthSession struct {
 	ID                  string // 26-char ULID
-	Mode                string // "loopback" | "device"
+	HandshakeMode       string // "loopback" | "device"
 	CodeChallenge       string // S256 hash, base64url
 	CodeChallengeMethod string // "S256"
 	LoopbackRedirect    string // empty for device mode
@@ -31,32 +31,32 @@ type AuthSession struct {
 	GitHubUserID        *int64 // populated after OAuth callback
 	GitHubUserLogin     string
 	PendingBundleJSON   string // TokenBundle awaiting pickup (device flow)
-	State               string // pending|awaiting_install|awaiting_picker|delivered|cancelled|expired
+	State               string // pending|awaiting_install|awaiting_picker|delivered|canceled|expired
 	CreatedAt           int64
 	ExpiresAt           int64
 }
 
-// InsertAuthSession writes a new session row. ID, Mode, CodeChallenge,
+// InsertAuthSession writes a new session row. ID, HandshakeMode, CodeChallenge,
 // CodeChallengeMethod, ClientLabel, CreatedAt and ExpiresAt are required.
 // State defaults to "pending" when empty.
 func (s *Store) InsertAuthSession(a AuthSession) error {
 	if a.ID == "" {
 		return fmt.Errorf("insert auth session: ID is required")
 	}
-	if a.Mode == "" {
-		return fmt.Errorf("insert auth session: Mode is required")
+	if a.HandshakeMode == "" {
+		return fmt.Errorf("insert auth session: HandshakeMode is required")
 	}
 	if a.State == "" {
 		a.State = "pending"
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO auth_sessions (
-		     id, mode, code_challenge, code_challenge_method,
+		     id, handshake_mode, code_challenge, code_challenge_method,
 		     loopback_redirect, device_code, user_code, client_label,
 		     github_user_id, github_user_login, pending_bundle_json,
 		     state, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.Mode, a.CodeChallenge, a.CodeChallengeMethod,
+		a.ID, a.HandshakeMode, a.CodeChallenge, a.CodeChallengeMethod,
 		nullableString(a.LoopbackRedirect), nullableString(a.DeviceCode),
 		nullableString(a.UserCode), a.ClientLabel,
 		nullableInt(a.GitHubUserID), nullableString(a.GitHubUserLogin),
@@ -77,13 +77,13 @@ func (s *Store) GetAuthSession(id string) (AuthSession, bool, error) {
 	var lr, dc, uc, gul, bundle sql.NullString
 	var guid sql.NullInt64
 	err := s.db.QueryRow(
-		`SELECT id, mode, code_challenge, code_challenge_method,
+		`SELECT id, handshake_mode, code_challenge, code_challenge_method,
 		        loopback_redirect, device_code, user_code, client_label,
 		        github_user_id, github_user_login, pending_bundle_json,
 		        state, created_at, expires_at
 		 FROM auth_sessions WHERE id = ?`, id,
 	).Scan(
-		&a.ID, &a.Mode, &a.CodeChallenge, &a.CodeChallengeMethod,
+		&a.ID, &a.HandshakeMode, &a.CodeChallenge, &a.CodeChallengeMethod,
 		&lr, &dc, &uc, &a.ClientLabel,
 		&guid, &gul, &bundle,
 		&a.State, &a.CreatedAt, &a.ExpiresAt,

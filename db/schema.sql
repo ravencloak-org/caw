@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS app_credentials (
 -- device), and the pending TokenBundle awaiting device-flow pickup.
 CREATE TABLE IF NOT EXISTS auth_sessions (
     id                    CHAR(26)     NOT NULL,           -- ULID
-    mode                  VARCHAR(16)  NOT NULL,           -- "loopback" | "device"
+    handshake_mode                  VARCHAR(16)  NOT NULL,           -- "loopback" | "device"
     code_challenge        VARCHAR(64)  NOT NULL,           -- S256 hash, base64url
     code_challenge_method VARCHAR(8)   NOT NULL,           -- "S256"
     loopback_redirect     VARCHAR(255) NULL,
@@ -133,7 +133,8 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     github_user_id        BIGINT       NULL,               -- set after OAuth callback
     github_user_login     VARCHAR(255) NULL,
     pending_bundle_json   TEXT         NULL,               -- TokenBundle awaiting pickup (device flow)
-    state                 VARCHAR(16)  NOT NULL DEFAULT 'pending', -- pending|awaiting_install|awaiting_picker|delivered|cancelled|expired
+    -- state: pending|awaiting_install|awaiting_picker|delivered|canceled|expired
+    state                 VARCHAR(16)  NOT NULL DEFAULT 'pending',
     created_at            BIGINT       NOT NULL,
     expires_at            BIGINT       NOT NULL,
     PRIMARY KEY (id),

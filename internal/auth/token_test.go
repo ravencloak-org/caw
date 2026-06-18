@@ -155,9 +155,9 @@ func TestRequired(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var (
-				sawContext  bool
-				gotUserID   int64
-				gotLogin    string
+				sawContext bool
+				gotUserID  int64
+				gotLogin   string
 			)
 
 			r := gin.New()

@@ -43,11 +43,11 @@ type ManifestHandler struct {
 	baseURL          string // publicly reachable URL of this Hub (CAW_BASE_URL)
 	githubBase       string // GitHub web base, defaults to https://github.com
 	st               *store.Store
-	mintFn           MintFunc                                         // may be nil
-	manifestJSON     []byte                                           // pre-encoded manifest (sans state)
-	bootstrapToken   string                                           // operator bootstrap secret (required)
-	allowRebootstrap bool                                             // permit overwriting existing credentials
-	secureCookie     bool                                             // emit Secure cookie attribute (false in plain-HTTP tests)
+	mintFn           MintFunc // may be nil
+	manifestJSON     []byte   // pre-encoded manifest (sans state)
+	bootstrapToken   string   // operator bootstrap secret (required)
+	allowRebootstrap bool     // permit overwriting existing credentials
+	secureCookie     bool     // emit Secure cookie attribute (false in plain-HTTP tests)
 }
 
 // ManifestConfig is the configuration for a ManifestHandler.

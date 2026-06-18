@@ -474,7 +474,7 @@ func TestSchemaMigratesV0_1Database(t *testing.T) {
 	// auth_sessions is freshly created; CRUD round-trips.
 	if err := s.InsertAuthSession(AuthSession{
 		ID:                  "01HXSESSIONIDSAMPLE000A001",
-		Mode:                "loopback",
+		HandshakeMode:       "loopback",
 		CodeChallenge:       "abc",
 		CodeChallengeMethod: "S256",
 		ClientLabel:         "test",
