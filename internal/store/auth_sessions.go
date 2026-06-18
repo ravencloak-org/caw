@@ -46,6 +46,21 @@ func (s *Store) InsertAuthSession(a AuthSession) error {
 	if a.HandshakeMode == "" {
 		return fmt.Errorf("insert auth session: HandshakeMode is required")
 	}
+	if a.CodeChallenge == "" {
+		return fmt.Errorf("insert auth session: CodeChallenge is required")
+	}
+	if a.CodeChallengeMethod == "" {
+		return fmt.Errorf("insert auth session: CodeChallengeMethod is required")
+	}
+	if a.ClientLabel == "" {
+		return fmt.Errorf("insert auth session: ClientLabel is required")
+	}
+	if a.CreatedAt == 0 {
+		return fmt.Errorf("insert auth session: CreatedAt is required")
+	}
+	if a.ExpiresAt == 0 {
+		return fmt.Errorf("insert auth session: ExpiresAt is required")
+	}
 	if a.State == "" {
 		a.State = "pending"
 	}

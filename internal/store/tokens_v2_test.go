@@ -194,6 +194,14 @@ func TestInsertTokenRow_RequiresHash(t *testing.T) {
 	}
 }
 
+func TestInsertTokenRow_RequiresInstallationID(t *testing.T) {
+	s := newTestStore(t)
+	err := s.InsertTokenRow(Token{Hash: "h-no-inst", Org: "org1"})
+	if err == nil || !strings.Contains(err.Error(), "InstallationID is required") {
+		t.Errorf("want InstallationID required error, got %v", err)
+	}
+}
+
 func TestInsertTokenRow_DefaultsDeviceLabelAndCreatedAt(t *testing.T) {
 	s := newTestStore(t)
 	tok := Token{

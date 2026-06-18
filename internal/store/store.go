@@ -57,8 +57,9 @@ func Open(path string) (*Store, error) {
 
 // migrations contains additive schema statements that schema.sql's
 // `CREATE TABLE IF NOT EXISTS` cannot apply to a pre-existing table. They are
-// run after schema.sql on every Open; "duplicate column name" is treated as
-// success so the call is idempotent across re-boots.
+// run BEFORE schema.sql on every Open (see Open's preamble for why);
+// "duplicate column name" AND "no such table" are both treated as success so
+// the call is idempotent across re-boots and safe on a fresh-bootstrap DB.
 var migrations = []string{
 	`ALTER TABLE tokens ADD COLUMN id                TEXT    NOT NULL DEFAULT ''`,
 	`ALTER TABLE tokens ADD COLUMN github_user_id    INTEGER`,
@@ -344,6 +345,9 @@ type Token struct {
 func (s *Store) InsertTokenRow(t Token) error {
 	if t.Hash == "" {
 		return fmt.Errorf("insert token row: Hash is required")
+	}
+	if t.InstallationID == "" {
+		return fmt.Errorf("insert token row: InstallationID is required")
 	}
 	if t.DeviceLabel == "" {
 		t.DeviceLabel = "legacy"

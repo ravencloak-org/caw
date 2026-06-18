@@ -51,6 +51,31 @@ func TestInsertAuthSession_DefaultsState(t *testing.T) {
 	}
 }
 
+func TestInsertAuthSession_RequiresAllDocumentedFields(t *testing.T) {
+	s := newTestStore(t)
+	cases := []struct {
+		name   string
+		mutate func(*AuthSession)
+		want   string
+	}{
+		{"CodeChallenge", func(a *AuthSession) { a.CodeChallenge = "" }, "CodeChallenge is required"},
+		{"CodeChallengeMethod", func(a *AuthSession) { a.CodeChallengeMethod = "" }, "CodeChallengeMethod is required"},
+		{"ClientLabel", func(a *AuthSession) { a.ClientLabel = "" }, "ClientLabel is required"},
+		{"CreatedAt", func(a *AuthSession) { a.CreatedAt = 0 }, "CreatedAt is required"},
+		{"ExpiresAt", func(a *AuthSession) { a.ExpiresAt = 0 }, "ExpiresAt is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := sampleAuthSession("validate-"+tc.name, "loopback")
+			tc.mutate(&a)
+			err := s.InsertAuthSession(a)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want %q error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestInsertAndGetAuthSession_LoopbackRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	a := sampleAuthSession("loop-1", "loopback")
