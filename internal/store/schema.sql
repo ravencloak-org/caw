@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS app_credentials (
 -- A purger sweeps expired rows every 15 min.
 CREATE TABLE IF NOT EXISTS auth_sessions (
     id                  TEXT NOT NULL,   -- ULID
-    handshake_mode                TEXT NOT NULL,   -- "loopback" | "device"
+    handshake_mode      TEXT NOT NULL,   -- "loopback" | "device"
     code_challenge      TEXT NOT NULL,   -- S256 hash, base64url
     code_challenge_method TEXT NOT NULL,   -- "S256"
     loopback_redirect   TEXT,
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     github_user_id      INTEGER,   -- set after OAuth callback
     github_user_login   TEXT,
     pending_bundle_json TEXT,   -- TokenBundle awaiting pickup (device flow)
-    -- state: pending|awaiting_install|awaiting_picker|delivered|canceled|expired
+    -- one of: pending|awaiting_install|awaiting_picker|delivered|canceled|expired
     state               TEXT NOT NULL DEFAULT 'pending',
     created_at          INTEGER NOT NULL,
     expires_at          INTEGER NOT NULL,

@@ -107,12 +107,12 @@ COLUMN_COMMENTS = {
     },
     "auth_sessions": {
         "id":                    "-- ULID",
-        "mode":                  '-- "loopback" | "device"',
+        "handshake_mode":        '-- "loopback" | "device"',
         "code_challenge":        "-- S256 hash, base64url",
         "code_challenge_method": '-- "S256"',
         "github_user_id":        "-- set after OAuth callback",
         "pending_bundle_json":   "-- TokenBundle awaiting pickup (device flow)",
-        "state":                 "-- pending|awaiting_install|awaiting_picker|delivered|cancelled|expired",
+        "state":                 "-- one of: pending|awaiting_install|awaiting_picker|delivered|canceled|expired",
     },
 }
 
@@ -290,19 +290,23 @@ def _render_body(entries: list) -> str:
     """
     lines = []
     n = len(entries)
+    max_line_len = 120  # matches sqlfluff LT05 default
     for idx, entry in enumerate(entries):
         is_last = idx == n - 1
         if isinstance(entry, tuple):
             sql_part, comment = entry
-            if is_last:
-                lines.append(f"{sql_part}   {comment}")
+            suffix_sql = sql_part if is_last else f"{sql_part},"
+            inline = f"{suffix_sql}   {comment}"
+            if len(inline) <= max_line_len:
+                lines.append(inline)
             else:
-                lines.append(f"{sql_part},   {comment}")
+                # Inline form would overflow; place the comment on its own
+                # line above the column, matched to the column's indent.
+                indent = sql_part[: len(sql_part) - len(sql_part.lstrip())]
+                lines.append(f"{indent}{comment}")
+                lines.append(suffix_sql)
         else:
-            if is_last:
-                lines.append(entry)
-            else:
-                lines.append(f"{entry},")
+            lines.append(entry if is_last else f"{entry},")
     return "\n".join(lines)
 
 
