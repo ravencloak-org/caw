@@ -128,3 +128,5 @@ _Decisions are recorded as ADRs: portable Go+SQLite Hub ([0001](./docs/adr/0001-
 ## Status
 
 POC — all build slices (1–9) merged and **deployed**. A live Hub runs at [caw.ravencloak.org](https://caw.ravencloak.org) (Docker + Cloudflare tunnel). Design converged; see `CONTEXT.md` + the ADRs.
+
+Releases: [CHANGELOG.md](./CHANGELOG.md) · [GitHub releases](https://github.com/ravencloak-org/caw/releases).
