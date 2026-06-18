@@ -157,3 +157,95 @@ func (s *Store) DeleteExpiredAuthSessions(now int64) (int64, error) {
 	}
 	return n, nil
 }
+
+// SetSessionUser writes the github_user_id + github_user_login captured at
+// /auth/cb/github time. Returns an error if no row matches id — Phase 3's
+// handler always carries a session that GetAuthSession already proved exists,
+// so a no-rows result is a bug.
+func (s *Store) SetSessionUser(id string, userID int64, userLogin string) error {
+	if id == "" {
+		return fmt.Errorf("set session user: id is required")
+	}
+	res, err := s.db.Exec(
+		`UPDATE auth_sessions SET github_user_id = ?, github_user_login = ? WHERE id = ?`,
+		userID, nullableString(userLogin), id,
+	)
+	if err != nil {
+		return fmt.Errorf("set session user: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session user: rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("set session user: no row with id %q", id)
+	}
+	return nil
+}
+
+// SetSessionPendingBundle stores the JSON TokenBundle on a session row,
+// transitioning state to "delivered". The device-flow /auth/poll handler reads
+// the bundle when the MCP polls with a matching code_verifier. The loopback
+// flow also calls this so the browser-side /auth/done poll can observe the
+// state transition; the loopback POST is fired immediately after.
+func (s *Store) SetSessionPendingBundle(id, bundleJSON string) error {
+	if id == "" {
+		return fmt.Errorf("set session pending bundle: id is required")
+	}
+	if bundleJSON == "" {
+		return fmt.Errorf("set session pending bundle: bundleJSON is required")
+	}
+	res, err := s.db.Exec(
+		`UPDATE auth_sessions SET pending_bundle_json = ?, state = 'delivered' WHERE id = ?`,
+		bundleJSON, id,
+	)
+	if err != nil {
+		return fmt.Errorf("set session pending bundle: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session pending bundle: rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("set session pending bundle: no row with id %q", id)
+	}
+	return nil
+}
+
+// GetSessionByDeviceCode looks up a session by its device_code (the secret
+// the MCP holds between /auth/start and /auth/poll). ok=false on no match.
+func (s *Store) GetSessionByDeviceCode(deviceCode string) (AuthSession, bool, error) {
+	if deviceCode == "" {
+		return AuthSession{}, false, nil
+	}
+	var id string
+	err := s.db.QueryRow(
+		`SELECT id FROM auth_sessions WHERE device_code = ?`, deviceCode,
+	).Scan(&id)
+	switch {
+	case err == sql.ErrNoRows:
+		return AuthSession{}, false, nil
+	case err != nil:
+		return AuthSession{}, false, fmt.Errorf("get session by device code: %w", err)
+	}
+	return s.GetAuthSession(id)
+}
+
+// GetSessionByUserCode looks up a session by the human-typeable user_code
+// (e.g. "WDJB-MJHT") the user pastes into /auth/device. ok=false on no match.
+func (s *Store) GetSessionByUserCode(userCode string) (AuthSession, bool, error) {
+	if userCode == "" {
+		return AuthSession{}, false, nil
+	}
+	var id string
+	err := s.db.QueryRow(
+		`SELECT id FROM auth_sessions WHERE user_code = ?`, userCode,
+	).Scan(&id)
+	switch {
+	case err == sql.ErrNoRows:
+		return AuthSession{}, false, nil
+	case err != nil:
+		return AuthSession{}, false, fmt.Errorf("get session by user code: %w", err)
+	}
+	return s.GetAuthSession(id)
+}

@@ -28,9 +28,9 @@ func ConfigFromEnv() (Config, error) {
 	if hubURL == "" {
 		return Config{}, fmt.Errorf("watcher: %s is required", EnvHubURL)
 	}
-	token := os.Getenv(EnvToken)
-	if token == "" {
-		return Config{}, fmt.Errorf("watcher: %s is required", EnvToken)
-	}
-	return Config{HubURL: hubURL, Token: token}, nil
+	// Token is now optional (Auth v2 Phase 3): a watcher that boots without
+	// a credentials file or env token still runs the `login` MCP tool, which
+	// populates credentials.json. Hub-calling tools surface "not logged in"
+	// at request time instead of failing startup.
+	return Config{HubURL: hubURL, Token: os.Getenv(EnvToken)}, nil
 }

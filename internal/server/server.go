@@ -24,7 +24,7 @@ import (
 // registered (ADR-0010 — self-service Watcher token issuance).
 // mintFn is optional: when non-nil it is passed to the Hub so that installation
 // "created" webhook events automatically mint a Hub token.
-func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, ich *hub.InstallCallbackHandler, mintFn hub.MintFunc) *gin.Engine {
+func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, ich *hub.InstallCallbackHandler, ash *hub.AuthSessionHandler, mintFn hub.MintFunc) *gin.Engine {
 	r := gin.New()
 	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
 
@@ -44,6 +44,21 @@ func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte,
 	}
 	if ich != nil {
 		r.GET("/github/app/install/callback", ich.Handle)
+	}
+
+	// Auth v2 Phase 3 /auth/* surface (issue #59). Distinct route group from
+	// /github/app/install/callback — install_callback handles GitHub's setup
+	// URL, /auth/* drives the MCP-initiated login wire protocol.
+	if ash != nil {
+		r.POST("/auth/start", ash.HandleStart)
+		r.GET("/auth/start-help", ash.HandleStartHelp)
+		r.GET("/auth/u/:session_id", ash.HandleBrowserStart)
+		r.GET("/auth/cb/github", ash.HandleGithubCallback)
+		r.GET("/auth/picker/:session_id", ash.HandlePickerGet)
+		r.POST("/auth/picker/:session_id", ash.HandlePickerPost)
+		r.GET("/auth/device", ash.HandleDevice)
+		r.POST("/auth/poll", ash.HandlePoll)
+		r.GET("/auth/done/:session_id", ash.HandleDone)
 	}
 
 	authMW := auth.Required(st)

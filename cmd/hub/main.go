@@ -130,6 +130,7 @@ func main() {
 	// hand-registered App (CAW_APP_CLIENT_ID/SECRET in env) works alongside a
 	// manifest-registered App (creds in DB) without restart.
 	var ich *hub.InstallCallbackHandler
+	var ash *hub.AuthSessionHandler
 	if cfg.BaseURL != "" {
 		credsFn := func() (string, string, bool, error) {
 			if cfg.AppClientID != "" && cfg.AppClientSecret != "" {
@@ -145,18 +146,53 @@ func main() {
 			return creds.ClientID, creds.ClientSecret, true, nil
 		}
 		ich, err = hub.NewInstallCallbackHandler(hub.InstallCallbackConfig{
-			BaseURL: cfg.BaseURL,
-			MintFn:  mintFn,
-			CredsFn: credsFn,
+			BaseURL:      cfg.BaseURL,
+			MintFn:       mintFn,
+			CredsFn:      credsFn,
+			SessionStore: st,
 		})
 		if err != nil {
 			log.Fatalf("install callback handler: %v", err)
 		}
+		// AppSlugFn: env CAW_APP_SLUG wins (operator override for the rare
+		// case of a brand-new self-host with no installations yet), then
+		// store.AnyAppSlug as the fallback (populated by the manifest flow
+		// + installation.created webhook).
+		appSlugFn := func() string {
+			if cfg.AppSlug != "" {
+				return cfg.AppSlug
+			}
+			s, err := st.AnyAppSlug()
+			if err != nil {
+				log.Printf("warning: AnyAppSlug: %v", err)
+				return ""
+			}
+			return s
+		}
+		secureCookie := len(cfg.BaseURL) >= 8 && cfg.BaseURL[:8] == "https://"
+		ash, err = hub.NewAuthSessionHandler(hub.AuthSessionHandlerConfig{
+			BaseURL:      cfg.BaseURL,
+			Store:        st,
+			MintFn:       mintFn,
+			CredsFn:      credsFn,
+			AppSlugFn:    appSlugFn,
+			SecureCookie: secureCookie,
+		})
+		if err != nil {
+			log.Fatalf("auth session handler: %v", err)
+		}
 	} else {
-		log.Println("warning: CAW_BASE_URL empty; self-service install-callback route disabled")
+		log.Println("warning: CAW_BASE_URL empty; self-service install-callback + /auth/* routes disabled")
 	}
 
-	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, mintFn)
+	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn)
+
+	// Auth v2 Phase 3: 15-min purger sweeps expired auth_sessions rows. The
+	// rows are also rejected on read by the handlers' own expiry checks; the
+	// purger just keeps the table small.
+	purgerCtx, stopPurger := context.WithCancel(context.Background())
+	defer stopPurger()
+	go runAuthSessionPurger(purgerCtx, st)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
@@ -180,6 +216,36 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
+	}
+}
+
+// runAuthSessionPurger runs every 15 min and deletes auth_sessions rows past
+// their expires_at. Auth v2 Phase 3 — a defensive sweep, not a primary expiry
+// gate (handlers also reject expired rows on read).
+func runAuthSessionPurger(ctx context.Context, st *store.Store) {
+	tick := time.NewTicker(15 * time.Minute)
+	defer tick.Stop()
+	// Run once immediately so a long-uptime hub doesn't carry crud across
+	// restarts at the cost of the first tick interval.
+	purgeOnce(st)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			purgeOnce(st)
+		}
+	}
+}
+
+func purgeOnce(st *store.Store) {
+	n, err := st.DeleteExpiredAuthSessions(time.Now().Unix())
+	if err != nil {
+		log.Printf("auth session purger: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("auth session purger: deleted %d expired rows", n)
 	}
 }
 

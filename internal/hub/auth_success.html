@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>caw — logged in</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<style>
+:root { color-scheme: light dark; --fg: #111; --bg: #fff; --muted: #555; --accent: #0066cc; --ok-bg: #e7f7e8; --ok-fg: #0a5d10; --border: #ddd; --code-bg: #f4f4f4; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #eee; --bg: #161616; --muted: #aaa; --accent: #5aa8ff; --ok-bg: #163a17; --ok-fg: #aef0b5; --border: #333; --code-bg: #202020; }
+}
+html, body { background: var(--bg); color: var(--fg); margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.5; }
+main { max-width: 640px; margin: 2.5rem auto; padding: 0 1.25rem; }
+h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+.banner { background: var(--ok-bg); color: var(--ok-fg); padding: 0.85rem 1rem; border-radius: 6px; margin: 1rem 0; font-weight: 600; }
+.meta { color: var(--muted); font-size: 0.85rem; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>✓ Logged in to <code>{{.ClientLabel}}</code></h1>
+  <div class="banner" id="status">Tokens minted ({{.TokenCount}}). Return to your terminal.</div>
+  <p class="meta">{{if eq .HandshakeMode "loopback"}}Your agent should already have the token bundle — the hub posted it to the loopback listener it opened at <code>POST /auth/start</code>.{{else}}Your agent will pick up the bundle on its next <code>/auth/poll</code>.{{end}}</p>
+  <hr>
+  <p class="meta">Session id: <code>{{.SessionID}}</code> · Hub: <a href="{{.HubURL}}">{{.HubURL}}</a></p>
+</main>
+<script>
+(function () {
+  // Tiny pixel: poll /auth/done/:id every 1.2s and flip the banner once
+  // delivered. Stops on terminal states (delivered, canceled, expired) or
+  // after 60s. The MCP separately picks up the token — this is only the
+  // human-facing confirmation.
+  var sid = {{.SessionID}};
+  var status = document.getElementById("status");
+  var tries = 0;
+  function poll() {
+    if (tries++ > 50) return;
+    fetch("/auth/done/" + encodeURIComponent(sid), { credentials: "omit" }).then(function (r) {
+      if (r.status === 200) {
+        status.textContent = "✓ Logged in. You can close this tab.";
+        return;
+      }
+      if (r.status === 410) {
+        status.textContent = "Login canceled or expired.";
+        return;
+      }
+      setTimeout(poll, 1200);
+    }).catch(function () { setTimeout(poll, 2500); });
+  }
+  poll();
+})();
+</script>
+</body>
+</html>

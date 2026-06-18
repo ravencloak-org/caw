@@ -46,6 +46,11 @@ type Config struct {
 	// already exist (ALLOW_REBOOTSTRAP). Off by default so a leaked bootstrap
 	// token cannot replace a live App's credentials.
 	AllowRebootstrap bool
+	// AppSlug overrides the GitHub App slug used to build the install-redirect
+	// URL on the Auth v2 zero-installations branch (Phase 3). Defaults to "";
+	// when empty, the hub falls back to store.AnyAppSlug (populated from the
+	// installation.created webhook). Operator-side env var: CAW_APP_SLUG.
+	AppSlug string
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -65,6 +70,7 @@ func Load() Config {
 		BaseURL:             os.Getenv("CAW_BASE_URL"),
 		BootstrapToken:      os.Getenv("CAW_BOOTSTRAP_TOKEN"),
 		AllowRebootstrap:    getenvBool("ALLOW_REBOOTSTRAP"),
+		AppSlug:             os.Getenv("CAW_APP_SLUG"),
 	}
 }
 
