@@ -96,7 +96,7 @@ func newAuthHandlerSetup(t *testing.T) *authHandlerSetup {
 func authStubHandler(t *testing.T, f *fakeGitHubAuth) http.Handler {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/login/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/login/oauth/access_token", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		body := f.oauthBody
 		if body == "" {
@@ -109,14 +109,14 @@ func authStubHandler(t *testing.T, f *fakeGitHubAuth) http.Handler {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	})
-	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":    int64(12345),
 			"login": "alice",
 		})
 	})
-	mux.HandleFunc("/user/installations", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/user/installations", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		type acc struct {
 			Login string `json:"login"`
@@ -139,7 +139,7 @@ func authStubHandler(t *testing.T, f *fakeGitHubAuth) http.Handler {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"installations": insts})
 	})
-	mux.HandleFunc("/login/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/login/oauth/authorize", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	return mux
@@ -743,3 +743,150 @@ func TestAuthStartHelp_RendersHTML(t *testing.T) {
 
 // suppress unused-import warning on io
 var _ = io.LimitReader
+
+// ── HandleDevice + renderDeviceWithError ─────────────────────────────────
+// The /auth/device entry point is the human-facing form the user lands on
+// after the CLI prints their user_code. These tests cover the four branches:
+// blank form (no code), unknown code, expired code, valid → 302.
+
+func TestAuthDevice_BlankFormWhenNoCode(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/device", nil)
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", got)
+	}
+	if rr.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", rr.Header().Get("Cache-Control"))
+	}
+	// Form rendered with empty PrefilledCode + no ErrorMessage — body should
+	// contain the form skeleton but no error styling.
+	body := rr.Body.String()
+	if !strings.Contains(body, "<form") {
+		t.Errorf("body missing <form: %s", body[:min(len(body), 200)])
+	}
+}
+
+func TestAuthDevice_UnknownCodeRendersError(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/device?code=WDJB-MJHT", nil)
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Unknown code") {
+		t.Errorf("body missing 'Unknown code' error: %s", body[:min(len(body), 400)])
+	}
+	// The PrefilledCode should be echoed back upper-cased so the user can
+	// see what was looked up.
+	if !strings.Contains(body, "WDJB-MJHT") {
+		t.Errorf("body missing prefilled code: %s", body[:min(len(body), 400)])
+	}
+}
+
+func TestAuthDevice_ExpiredCodeRendersError(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	// Insert an auth_session with a user_code that's already past its expiry.
+	now := time.Unix(s.now, 0)
+	if err := s.st.InsertAuthSession(store.AuthSession{
+		ID:                  "expired-1",
+		HandshakeMode:       "device",
+		CodeChallenge:       "chal",
+		CodeChallengeMethod: "S256",
+		ClientLabel:         "test",
+		DeviceCode:          "dev-expired",
+		UserCode:            "EXPI-RED1",
+		CreatedAt:           now.Add(-20 * time.Minute).Unix(),
+		ExpiresAt:           now.Add(-1 * time.Minute).Unix(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/device?code=EXPI-RED1", nil)
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "expired") {
+		t.Errorf("body missing 'expired' error: %s", body[:min(len(body), 400)])
+	}
+}
+
+func TestAuthDevice_ValidCodeRedirectsToGithub(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	now := time.Unix(s.now, 0)
+	if err := s.st.InsertAuthSession(store.AuthSession{
+		ID:                  "live-1",
+		HandshakeMode:       "device",
+		CodeChallenge:       "chal",
+		CodeChallengeMethod: "S256",
+		ClientLabel:         "test",
+		DeviceCode:          "dev-live",
+		UserCode:            "WDJB-MJHT",
+		CreatedAt:           now.Unix(),
+		ExpiresAt:           now.Add(10 * time.Minute).Unix(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	// Lower-case input: handler normalizes to upper-case before lookup.
+	req := httptest.NewRequest(http.MethodGet, "/auth/device?code=wdjb-mjht", nil)
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 redirect; body=%s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "/login/oauth/authorize") {
+		t.Errorf("Location = %q, want /login/oauth/authorize redirect", loc)
+	}
+	// Cookie must carry the session id so /auth/cb/github can pick it up.
+	gotCookie := rr.Result().Cookies()
+	var sessionCookie *http.Cookie
+	for _, c := range gotCookie {
+		if c.Name == authSessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("missing %s cookie", authSessionCookieName)
+	}
+	if sessionCookie.Value != "live-1" {
+		t.Errorf("cookie value = %q, want live-1", sessionCookie.Value)
+	}
+}
+
+func TestAuthDevice_CredsMissingReturns424(t *testing.T) {
+	s := newAuthHandlerSetup(t)
+	// Swap the creds source to one that says "not configured".
+	s.h.cfg.CredsFn = func() (string, string, bool, error) {
+		return "", "", false, nil
+	}
+	now := time.Unix(s.now, 0)
+	if err := s.st.InsertAuthSession(store.AuthSession{
+		ID:                  "no-creds-1",
+		HandshakeMode:       "device",
+		CodeChallenge:       "chal",
+		CodeChallengeMethod: "S256",
+		ClientLabel:         "test",
+		DeviceCode:          "dev-nc",
+		UserCode:            "NOCR-EDS1",
+		CreatedAt:           now.Unix(),
+		ExpiresAt:           now.Add(10 * time.Minute).Unix(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth/device?code=NOCR-EDS1", nil)
+	s.r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFailedDependency {
+		t.Errorf("status = %d, want 424 FailedDependency; body=%s", rr.Code, rr.Body.String())
+	}
+}

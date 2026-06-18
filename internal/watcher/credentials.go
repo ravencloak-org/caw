@@ -44,7 +44,7 @@ type TokenRecord struct {
 // DefaultCredentialsPath returns the canonical credentials.json path:
 // $XDG_CONFIG_HOME/caw/credentials.json (or ~/.config/caw/... if XDG unset).
 // On macOS Go's os.UserConfigDir returns ~/Library/Application Support; the
-// plan picks ONE path per host OS and documents it — we honour that.
+// plan picks ONE path per host OS and documents it — we honor that.
 func DefaultCredentialsPath() (string, error) {
 	if env := os.Getenv("CAW_CREDENTIALS_PATH"); env != "" {
 		return env, nil
