@@ -21,6 +21,14 @@ GitHub ──webhooks──▶ Hub ──compile──▶ SSE push ──▶ Wat
                       └─ no listener? store as Pending item ──▶ next Session's startup check ──▶ prompt human
 ```
 
+### End-to-end sequence (Auth v2)
+
+Full login + auto-subscribe-on-PR-open flow, from a coding agent invoking the `login` MCP tool through to the summary push back. Spans the OAuth loopback handshake (PKCE), optional GitHub-App install resume, the persistent per-user control stream, and the per-PR SSE driven by webhook fan-out.
+
+[![Auth v2 flow — MCP login + auto-subscribe-on-PR-open](docs/images/auth-v2-flow.png)](docs/images/auth-v2-flow.drawio)
+
+_Source: [`docs/images/auth-v2-flow.drawio`](docs/images/auth-v2-flow.drawio) — open in [draw.io](https://app.diagrams.net/) to edit. See the phased plan + ADR-0011 (forthcoming) for the implementation slices._
+
 **Live path.** A **Session** raises a PR; its **Watcher** (a local MCP server) opens and *holds* an SSE connection to the **Hub** keyed `owner/repo#number`. Many Sessions may subscribe to the same PR — summaries **fan out** to all listeners. The Hub ingests that **Round**'s GitHub webhooks; once checks settle (`check_suite completed` + ~30s grace) it runs the one poll (mergeability), compiles a summary, and pushes it down the held connections. A late same-SHA signal (async review comment, flipped check) **re-settles** the Round and pushes a follow-up (one summary *per settle* — [ADR-0004](./docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md)). The Session acts in the PR's worktree, pushes, and the next Round begins. A new head SHA supersedes the prior Round.
 
 **Catch-up path.** Zero live Subscriptions → the summary is stored as a **Pending item** (latest-state per signal-type — [ADR-0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md)). A brand-new Session makes **one** request at startup ("anything pending?"), surfaced by a SessionStart hook, gets *all* current items, and prompts the human before acting on work it didn't start.
