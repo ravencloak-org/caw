@@ -1,0 +1,30 @@
+# Categorizes auto-generated GitHub release notes (used by `gh release create
+# --generate-notes` from .github/workflows/release.yml). Grouping is by PR
+# label; unlabeled PRs fall through to "Other Changes" via the `*` bucket.
+# Dependabot bumps stay out so the changelog reads as product changes.
+
+changelog:
+  exclude:
+    labels:
+      - dependencies
+      - chore
+      - ci
+    authors:
+      - dependabot
+      - dependabot[bot]
+  categories:
+    - title: Features
+      labels:
+        - feat
+        - feature
+        - enhancement
+    - title: Fixes
+      labels:
+        - fix
+        - bug
+    - title: Documentation
+      labels:
+        - docs
+    - title: Other Changes
+      labels:
+        - "*"

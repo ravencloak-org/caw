@@ -17,8 +17,8 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: read
-  packages: write
+  contents: write   # gh release create
+  packages: write   # GHCR push
 
 jobs:
   build-push:
@@ -81,3 +81,20 @@ jobs:
           # Surface any 4xx/5xx as a job failure so the Actions UI reflects
           # whether the deploy was actually queued.
           test "$status" -ge 200 && test "$status" -lt 300
+
+  github-release:
+    name: GitHub Release
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gh needs full history to diff against the previous tag
+
+      - name: Create release with auto-generated notes
+        # --generate-notes pulls PR titles/labels since the previous tag and
+        # groups them per .github/release.yml. --verify-tag refuses if the tag
+        # ref we got triggered on doesn't actually exist on the remote.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
