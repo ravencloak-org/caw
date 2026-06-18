@@ -5,6 +5,8 @@
 
 > Push PR feedback to the agent that raised the PR — so it fixes its own PR without being prodded.
 
+**Install (Claude / Cursor / Codex CLI):** see [`docs/install/`](./docs/install/).
+
 When an AI agent raises a pull request, getting it green (CI, review comments, mergeability) usually means a human babysitting the PR and re-prompting the agent every time something fails. Caw inverts that: GitHub webhooks are compiled into a single summary and **pushed** to the agent over a held-open SSE connection, so the agent that raised the PR keeps working it on its own. If that agent is gone, the summary waits as a *pending item* for the next agent to pick up.
 
 Caw is **harness-agnostic** (any MCP client — Claude, Gemini, OpenAI, Cursor) and **reviewer-agnostic** (any commenting bot or human — CodeRabbit, Sonar, Snyk, …).
@@ -89,6 +91,7 @@ Then:
 2. **Install the App** on the repos you want watched.
 3. **Mint a Watcher token** — `hub mint-token <installation_id> [org]` (the raw token is never echoed by the manifest callback).
 4. **Point a Watcher** (the MCP server in your harness) at the Hub URL with that token and `subscribe_pr(owner, repo, number)`.
+  - See [`docs/install/`](./docs/install/) for harness-specific configs (Claude Desktop, Cursor, Codex CLI).
 
 **SaaS:** install the hosted App, install the Watcher, subscribe. (Pricing TBD.)
 
