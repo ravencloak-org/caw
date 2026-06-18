@@ -71,7 +71,7 @@ func newTestServerOpts(t *testing.T, grace time.Duration, optsFn func(*store.Sto
 		opts = optsFn(st)
 	}
 	engine := settle.New(st, sseHub, grace, opts...)
-	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil))
+	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil, nil))
 	t.Cleanup(ts.Close)
 	return ts, raw, st
 }

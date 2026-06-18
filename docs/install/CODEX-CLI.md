@@ -53,7 +53,7 @@ The exact TOML schema may differ between Codex CLI releases — check the upstre
 
   `<installation_id>` is the GitHub App installation; `<org>` is the org or user that installed it.
 
-- **Public Hub (`caw.ravencloak.org`):** self-service token minting is not shipped yet — ask Jobin at <https://github.com/jobinlawrance>.
+- **Public Hub (`caw.ravencloak.org`):** install the [caw GitHub App](https://github.com/apps/caw-ravencloak) on the repo you want watched. GitHub redirects you to `https://caw.ravencloak.org/github/app/install/callback`, which shows your token once — copy it into the `CAW_WATCHER_TOKEN` env var above ([ADR-0010](../adr/0010-self-service-watcher-tokens.md)).
 
 ## 4. Smoke test
 

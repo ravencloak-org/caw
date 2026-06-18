@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>caw — Watcher token</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<style>
+:root { color-scheme: light dark; --fg: #111; --bg: #fff; --muted: #555; --accent: #0066cc; --warn-bg: #fff4e5; --warn-fg: #663300; --code-bg: #f4f4f4; --border: #ddd; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #eee; --bg: #161616; --muted: #aaa; --accent: #5aa8ff; --warn-bg: #3a2a10; --warn-fg: #f5d28a; --code-bg: #202020; --border: #333; }
+}
+html, body { background: var(--bg); color: var(--fg); margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.5; }
+main { max-width: 720px; margin: 2.5rem auto; padding: 0 1.25rem; }
+h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
+.sub { color: var(--muted); margin: 0 0 1.5rem; }
+.warn { background: var(--warn-bg); color: var(--warn-fg); padding: 0.75rem 1rem; border-radius: 6px; margin: 1.25rem 0; font-weight: 600; }
+.token-row { display: flex; gap: 0.5rem; align-items: stretch; }
+.token { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.95rem; background: var(--code-bg); padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: 6px; word-break: break-all; user-select: all; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 0 1rem; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+button:hover { filter: brightness(1.1); }
+button:active { transform: translateY(1px); }
+details { border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+details summary { cursor: pointer; font-weight: 600; }
+details[open] summary { margin-bottom: 0.5rem; }
+pre { background: var(--code-bg); padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; margin: 0.25rem 0; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+a { color: var(--accent); }
+.meta { color: var(--muted); font-size: 0.9rem; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>✓ caw installed on <code>{{.Account}}</code></h1>
+  <p class="sub">Installation <code>{{.InstallID}}</code> · Hub <a href="{{.HubURL}}">{{.HubURL}}</a></p>
+
+  <h2>Your Watcher token</h2>
+  <div class="token-row">
+    <div id="token" class="token">{{.Token}}</div>
+    <button id="copy" type="button" aria-label="Copy token">Copy</button>
+  </div>
+
+  <p class="warn">This token is shown once. Save it now — refreshing this page will not bring it back. (You can mint a replacement by re-running the install flow or via <code>hub mint-token</code> if you self-host.)</p>
+
+  <h2>Drop into your harness</h2>
+  <p class="meta">Set <code>CAW_WATCHER_TOKEN</code> to the token above and <code>CAW_WATCHER_HUB_URL</code> to <code>{{.HubURL}}</code>. Full install guides: <a href="https://github.com/ravencloak-org/caw/tree/main/docs/install">docs/install/</a>.</p>
+
+  <details>
+    <summary>Claude Desktop — <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></summary>
+<pre><code>{
+  "mcpServers": {
+    "caw": {
+      "command": "/usr/local/bin/caw-watcher",
+      "env": {
+        "CAW_WATCHER_HUB_URL": "{{.HubURL}}",
+        "CAW_WATCHER_TOKEN": "{{.Token}}"
+      }
+    }
+  }
+}</code></pre>
+  </details>
+
+  <details>
+    <summary>Cursor — <code>~/.cursor/mcp.json</code></summary>
+<pre><code>{
+  "mcpServers": {
+    "caw": {
+      "command": "/usr/local/bin/caw-watcher",
+      "env": {
+        "CAW_WATCHER_HUB_URL": "{{.HubURL}}",
+        "CAW_WATCHER_TOKEN": "{{.Token}}"
+      }
+    }
+  }
+}</code></pre>
+  </details>
+
+  <details>
+    <summary>Codex CLI — <code>~/.codex/config.toml</code> <span class="meta">(unverified, confirm schema against upstream)</span></summary>
+<pre><code>[mcp_servers.caw]
+command = "/usr/local/bin/caw-watcher"
+
+[mcp_servers.caw.env]
+CAW_WATCHER_HUB_URL = "{{.HubURL}}"
+CAW_WATCHER_TOKEN = "{{.Token}}"</code></pre>
+  </details>
+
+  <hr>
+  <p class="meta">Token authentication is documented in <a href="https://github.com/ravencloak-org/caw/blob/main/docs/adr/0003-sse-auth-via-hub-minted-installation-token.md">ADR-0003</a>; self-service issuance is <a href="https://github.com/ravencloak-org/caw/blob/main/docs/adr/0010-self-service-watcher-tokens.md">ADR-0010</a>.</p>
+</main>
+<script>
+(function () {
+  var btn = document.getElementById("copy");
+  var tok = document.getElementById("token");
+  if (!btn || !tok || !navigator.clipboard) return;
+  btn.addEventListener("click", function () {
+    navigator.clipboard.writeText(tok.textContent.trim()).then(function () {
+      var orig = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = orig; }, 1500);
+    });
+  });
+})();
+</script>
+</body>
+</html>

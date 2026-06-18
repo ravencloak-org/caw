@@ -89,8 +89,11 @@ func NewManifestHandler(cfg ManifestConfig) (*ManifestHandler, error) {
 			"url":    cfg.BaseURL + "/webhooks/github",
 			"active": true,
 		},
-		"redirect_url": callbackURL,
-		"public":       false,
+		"redirect_url":             callbackURL,
+		"setup_url":                cfg.BaseURL + "/github/app/install/callback", // ADR-0010: self-service Watcher token issuance
+		"setup_on_update":          false,
+		"request_oauth_on_install": true, // required so /install/callback receives ?code= for ownership check
+		"public":                   false,
 		"default_permissions": map[string]any{
 			"pull_requests": "write", // read PR state + enable auto-merge (ADR-0002)
 			"checks":        "read",

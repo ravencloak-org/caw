@@ -20,9 +20,11 @@ import (
 // without buffering middleware so the held connection streams (ADR-0001).
 //
 // mh is optional: when non-nil the GitHub App Manifest flow routes are registered.
+// ich is optional: when non-nil the App install Setup URL callback route is
+// registered (ADR-0010 — self-service Watcher token issuance).
 // mintFn is optional: when non-nil it is passed to the Hub so that installation
 // "created" webhook events automatically mint a Hub token.
-func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, mintFn func(installationID, org string) (string, error)) *gin.Engine {
+func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, ich *hub.InstallCallbackHandler, mintFn func(installationID, org string) (string, error)) *gin.Engine {
 	r := gin.New()
 	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
 
@@ -39,6 +41,9 @@ func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte,
 	if mh != nil {
 		r.GET("/github/app/manifest", mh.HandleManifest)
 		r.GET("/github/app/callback", mh.HandleCallback)
+	}
+	if ich != nil {
+		r.GET("/github/app/install/callback", ich.Handle)
 	}
 
 	authMW := auth.Required(st)

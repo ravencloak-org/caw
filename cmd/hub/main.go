@@ -120,7 +120,26 @@ func main() {
 		log.Println("warning: CAW_BASE_URL set but CAW_BOOTSTRAP_TOKEN empty; GitHub App manifest flow disabled")
 	}
 
-	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, mintFn)
+	// Build the install-callback handler (ADR-0010). It serves the App's
+	// Setup URL after a user installs, mints a Watcher token on the spot, and
+	// renders it once. It is independent of the manifest flow: as long as
+	// BaseURL is set we register it; missing App credentials are reported by
+	// the handler at request time (since they are loaded from the store).
+	var ich *hub.InstallCallbackHandler
+	if cfg.BaseURL != "" {
+		ich, err = hub.NewInstallCallbackHandler(hub.InstallCallbackConfig{
+			BaseURL: cfg.BaseURL,
+			Store:   st,
+			MintFn:  mintFn,
+		})
+		if err != nil {
+			log.Fatalf("install callback handler: %v", err)
+		}
+	} else {
+		log.Println("warning: CAW_BASE_URL empty; self-service install-callback route disabled")
+	}
+
+	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, mintFn)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
