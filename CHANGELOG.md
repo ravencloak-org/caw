@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- feat(auth-v2): phase 2 — per-user authorization middleware + repo-access cache. Adds `internal/repoaccess` (5-min positive / 60-s negative TTL, 30-min stale-allow grace, single-flight collapse) and `internal/hub/repo_access_middleware.go`. Wired after `RequireRepoScope` on `/sse/...` and `/leases/...`. Legacy tokens (NULL `github_user_id`) bypass with `Deprecation: legacy-token`; enforcement begins in Phase 5. Webhook flush hooks on `installation.deleted` and `installation_repositories.removed`.
+
 ## [v0.1.4]
 
 ### Changed
