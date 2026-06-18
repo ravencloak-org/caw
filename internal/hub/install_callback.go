@@ -343,7 +343,7 @@ var installErrorCopy = map[string]errorCopy{
 // In Phase 3 of Auth v2 this lands on the real /auth/start-help handler that
 // tells the user to run the `login` tool in their agent; in Phase 0 the URL
 // 404s, which is acceptable because the on-page bullets already carry the
-// actionable guidance. Centralising lets Phase 3 rename in one place.
+// actionable guidance. Centralizing lets Phase 3 rename in one place.
 func (h *InstallCallbackHandler) restartURL() string {
 	return h.baseURL + "/auth/start-help"
 }
