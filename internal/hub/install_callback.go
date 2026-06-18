@@ -14,8 +14,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/ravencloak-org/caw/internal/store"
 )
 
 //go:embed install_callback.html
@@ -44,7 +42,7 @@ type InstallCallbackHandler struct {
 	baseURL    string
 	githubBase string
 	apiBase    string
-	st         *store.Store
+	credsFn    func() (clientID, clientSecret string, ok bool, err error)
 	mintFn     func(installationID, org string) (string, error)
 	httpClient HTTPDoer
 	tmpl       *template.Template
@@ -64,8 +62,18 @@ type InstallCallbackConfig struct {
 	GithubBase string
 	// APIBase is api.github.com (configurable for tests); defaults to https://api.github.com.
 	APIBase string
-	// Store is used to load the App's OAuth client_id/client_secret.
-	Store *store.Store
+	// CredsFn resolves the App's OAuth client_id/client_secret at REQUEST time.
+	// It is called on every install-callback request, so an operator who later
+	// runs the manifest flow (or seeds env vars on the next deploy) does not
+	// need to restart for the handler to see fresh credentials.
+	//
+	// ok=false signals "no credentials available right now" → handler returns
+	// 424 FailedDependency. err is reserved for genuine lookup failures.
+	//
+	// main.go's wiring stacks env (CAW_APP_CLIENT_ID/SECRET) over
+	// store.LoadAppCredentials() so a hand-registered App that lives in env
+	// works alongside a manifest-registered App that lives in the DB.
+	CredsFn func() (clientID, clientSecret string, ok bool, err error)
 	// MintFn issues a Watcher token bound to (installationID, org); same function the
 	// `hub mint-token` CLI subcommand uses, returning the raw token (shown once).
 	MintFn func(installationID, org string) (string, error)
@@ -79,8 +87,8 @@ func NewInstallCallbackHandler(cfg InstallCallbackConfig) (*InstallCallbackHandl
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("NewInstallCallbackHandler: BaseURL is required")
 	}
-	if cfg.Store == nil {
-		return nil, fmt.Errorf("NewInstallCallbackHandler: Store is required")
+	if cfg.CredsFn == nil {
+		return nil, fmt.Errorf("NewInstallCallbackHandler: CredsFn is required")
 	}
 	if cfg.MintFn == nil {
 		return nil, fmt.Errorf("NewInstallCallbackHandler: MintFn is required")
@@ -105,7 +113,7 @@ func NewInstallCallbackHandler(cfg InstallCallbackConfig) (*InstallCallbackHandl
 		baseURL:    cfg.BaseURL,
 		githubBase: gh,
 		apiBase:    api,
-		st:         cfg.Store,
+		credsFn:    cfg.CredsFn,
 		mintFn:     cfg.MintFn,
 		httpClient: hc,
 		tmpl:       tmpl,
@@ -130,23 +138,20 @@ func (h *InstallCallbackHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	creds, ok, err := h.st.LoadAppCredentials()
+	clientID, clientSecret, ok, err := h.credsFn()
 	if err != nil {
 		log.Printf("install callback: load credentials: %v", err)
-		c.String(http.StatusInternalServerError, "store failed")
+		c.String(http.StatusInternalServerError, "credentials lookup failed")
 		return
 	}
-	if !ok {
-		c.String(http.StatusFailedDependency, "App credentials not configured; run the manifest flow first")
-		return
-	}
-	if creds.ClientID == "" || creds.ClientSecret == "" {
-		c.String(http.StatusFailedDependency, "App OAuth credentials missing")
+	if !ok || clientID == "" || clientSecret == "" {
+		c.String(http.StatusFailedDependency,
+			"App OAuth credentials not configured; set CAW_APP_CLIENT_ID/CAW_APP_CLIENT_SECRET or run the manifest flow")
 		return
 	}
 
 	ctx := c.Request.Context()
-	userToken, err := h.exchangeOAuthCode(ctx, creds.ClientID, creds.ClientSecret, code)
+	userToken, err := h.exchangeOAuthCode(ctx, clientID, clientSecret, code)
 	if err != nil {
 		log.Printf("install callback: oauth exchange: %v", err)
 		c.String(http.StatusBadGateway, "OAuth exchange failed")
