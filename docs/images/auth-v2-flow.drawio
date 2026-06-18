@@ -1,0 +1,398 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.0.4">
+  <diagram name="auth-v2-flow">
+    <mxGraphModel dx="2400" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1700" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Caw Auth v2 — MCP login + auto-subscribe-on-PR-open" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="2320" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- LIFELINE HEADERS -->
+        <mxCell id="hAgent" value="Coding Agent&#xa;(Claude Code / Cursor / Codex)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="80" y="80" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="hMCP" value="caw-watcher (MCP)&#xa;running locally" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="400" y="80" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="hBrowser" value="User's Browser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="720" y="80" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="hHub" value="caw Hub&#xa;caw.ravencloak.org" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="80" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="hGitHub" value="GitHub&#xa;OAuth + REST + Webhooks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="80" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="hRepoMaint" value="Repo Maintainer&#xa;(or CI bot)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="80" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="hSqlite" value="caw.db (SQLite)&#xa;tokens, auth_sessions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="2000" y="80" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- DASHED LIFELINE LINES (no source/target, just coordinates) -->
+        <mxCell id="llAgent" style="endArrow=none;html=1;dashed=1;strokeColor=#6c8ebf;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="200" y="140" as="sourcePoint" />
+            <mxPoint x="200" y="1670" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="llMCP" style="endArrow=none;html=1;dashed=1;strokeColor=#6c8ebf;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="140" as="sourcePoint" />
+            <mxPoint x="520" y="1670" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="llBrowser" style="endArrow=none;html=1;dashed=1;strokeColor=#9673a6;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="840" y="140" as="sourcePoint" />
+            <mxPoint x="840" y="1670" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="llHub" style="endArrow=none;html=1;dashed=1;strokeColor=#82b366;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="140" as="sourcePoint" />
+            <mxPoint x="1160" y="1670" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="llGitHub" style="endArrow=none;html=1;dashed=1;strokeColor=#666666;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1480" y="140" as="sourcePoint" />
+            <mxPoint x="1480" y="1670" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="llRepoMaint" style="endArrow=none;html=1;dashed=1;strokeColor=#d79b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1800" y="140" as="sourcePoint" />
+            <mxPoint x="1800" y="1670" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="llSqlite" style="endArrow=none;html=1;dashed=1;strokeColor=#666666;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="2120" y="140" as="sourcePoint" />
+            <mxPoint x="2120" y="1670" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- ACT 1 — LOGIN                                                  -->
+        <!-- ============================================================ -->
+        <mxCell id="act1" value="1. LOGIN&#160;&#160;—&#160;&#160;OAuth loopback (PKCE S256) + optional GitHub App install" style="text;html=1;strokeColor=#82b366;fillColor=#d5e8d4;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="80" y="170" width="2160" height="34" as="geometry" />
+        </mxCell>
+
+        <!-- 1.1 agent -> MCP invoke login -->
+        <mxCell id="e1" value="invoke login tool" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="200" y="230" as="sourcePoint" />
+            <mxPoint x="520" y="230" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.2 MCP self-loop (bind port) -->
+        <mxCell id="e2" value="bind 127.0.0.1:NNNN, generate code_verifier + code_challenge" style="endArrow=classic;html=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;curved=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="640" y="262" />
+              <mxPoint x="640" y="278" />
+            </Array>
+            <mxPoint x="525" y="262" as="sourcePoint" />
+            <mxPoint x="525" y="278" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.3 MCP -> Hub POST /auth/start -->
+        <mxCell id="e3" value="POST /auth/start  { mode:loopback, loopback_redirect, code_challenge, client_label }" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="310" as="sourcePoint" />
+            <mxPoint x="1160" y="310" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.4 Hub -> SQLite INSERT auth_sessions -->
+        <mxCell id="e4" value="INSERT auth_sessions (id, code_challenge, expires_at)" style="endArrow=classic;html=1;strokeColor=#999999;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="340" as="sourcePoint" />
+            <mxPoint x="2120" y="340" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.5 Hub -> MCP 200 -->
+        <mxCell id="e5" value="200 { session_id, verification_url }" style="endArrow=classic;html=1;strokeColor=#82b366;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="375" as="sourcePoint" />
+            <mxPoint x="520" y="375" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.6 MCP -> Browser open -->
+        <mxCell id="e6" value="open(verification_url)" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="410" as="sourcePoint" />
+            <mxPoint x="840" y="410" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.7 Browser -> Hub GET /auth/u -->
+        <mxCell id="e7" value="GET /auth/u/:session_id" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="840" y="445" as="sourcePoint" />
+            <mxPoint x="1160" y="445" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.8 Hub -> Browser 302 + cookie -->
+        <mxCell id="e8" value="302 → /login/oauth/authorize  ·  Set-Cookie: caw_auth_session" style="endArrow=classic;html=1;strokeColor=#82b366;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="485" as="sourcePoint" />
+            <mxPoint x="840" y="485" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.9 Browser -> GitHub authorize -->
+        <mxCell id="e9" value="GET /login/oauth/authorize?client_id=&amp;state=session_id" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="840" y="525" as="sourcePoint" />
+            <mxPoint x="1480" y="525" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.10 user consents note -->
+        <mxCell id="note110" value="User authorizes&#xa;the caw App" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1520" y="545" width="120" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- 1.11 GitHub -> Hub callback -->
+        <mxCell id="e11" value="302 → /auth/cb/github?code=&amp;state=" style="endArrow=classic;html=1;strokeColor=#666666;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1480" y="615" as="sourcePoint" />
+            <mxPoint x="1160" y="615" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.12 Hub -> GitHub exchange code -->
+        <mxCell id="e12" value="POST /login/oauth/access_token (exchange code)" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="650" as="sourcePoint" />
+            <mxPoint x="1480" y="650" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.13 GitHub -> Hub user_token -->
+        <mxCell id="e13" value="200 { access_token (user-to-server) }" style="endArrow=classic;html=1;strokeColor=#666666;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1480" y="685" as="sourcePoint" />
+            <mxPoint x="1160" y="685" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.14 Hub -> GitHub identity + installations -->
+        <mxCell id="e14" value="GET /user  +  GET /user/installations" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="720" as="sourcePoint" />
+            <mxPoint x="1480" y="720" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.15 GitHub -> Hub identity+installs -->
+        <mxCell id="e15" value="200 { id, login, installations[] }" style="endArrow=classic;html=1;strokeColor=#666666;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1480" y="755" as="sourcePoint" />
+            <mxPoint x="1160" y="755" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.16 optional-install note -->
+        <mxCell id="dec116" value="if installations[] is empty: 302 → github.com/apps/&lt;slug&gt;/installations/new?state=session_id&#xa;(user installs App; /github/app/install/callback resumes the session)" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="700" y="780" width="800" height="44" as="geometry" />
+        </mxCell>
+
+        <!-- 1.17 Hub -> Browser picker HTML -->
+        <mxCell id="e17" value="200 picker HTML: choose installations + device_label" style="endArrow=classic;html=1;strokeColor=#82b366;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="855" as="sourcePoint" />
+            <mxPoint x="840" y="855" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.18 Browser -> Hub POST picker -->
+        <mxCell id="e18" value="POST /auth/picker/:session_id  { installation_ids[], device_label }" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="840" y="890" as="sourcePoint" />
+            <mxPoint x="1160" y="890" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.19 Hub -> SQLite tokens -->
+        <mxCell id="e19" value="INSERT tokens (hash, installation_id, github_user_id, device_label, expires_at)" style="endArrow=classic;html=1;strokeColor=#999999;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="925" as="sourcePoint" />
+            <mxPoint x="2120" y="925" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.20 Hub -> MCP loopback POST -->
+        <mxCell id="e20" value="POST http://127.0.0.1:NNNN/cb&#xa;{ session_id, code_challenge, tokens[], github_user_id, github_user_login }" style="endArrow=classic;html=1;strokeColor=#82b366;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="975" as="sourcePoint" />
+            <mxPoint x="520" y="975" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.21 MCP self-loop persist -->
+        <mxCell id="e21" value="verify challenge match → write ~/.config/caw/credentials.json (0600)" style="endArrow=classic;html=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;curved=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="640" y="1010" />
+              <mxPoint x="640" y="1026" />
+            </Array>
+            <mxPoint x="525" y="1010" as="sourcePoint" />
+            <mxPoint x="525" y="1026" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 1.22 MCP -> Agent done -->
+        <mxCell id="e22" value="✓ logged in as &lt;login&gt;" style="endArrow=classic;html=1;strokeColor=#82b366;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="1055" as="sourcePoint" />
+            <mxPoint x="200" y="1055" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- ACT 2 — CONTROL STREAM                                        -->
+        <!-- ============================================================ -->
+        <mxCell id="act2" value="2. CONTROL STREAM&#160;&#160;—&#160;&#160;persistent SSE for per-user notifications (Phase 3.5)" style="text;html=1;strokeColor=#9673a6;fillColor=#e1d5e7;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1085" width="2160" height="34" as="geometry" />
+        </mxCell>
+
+        <!-- 2.1 MCP -> Hub GET /sse/me/control -->
+        <mxCell id="e23" value="GET /sse/me/control  ·  Authorization: Bearer &lt;token&gt;" style="endArrow=classic;html=1;strokeColor=#9673a6;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="1145" as="sourcePoint" />
+            <mxPoint x="1160" y="1145" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 2.2 Hub -> MCP held SSE -->
+        <mxCell id="e24" value="200 text/event-stream  (held open; event: ping every 25s)" style="endArrow=classic;html=1;strokeColor=#9673a6;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="1180" as="sourcePoint" />
+            <mxPoint x="520" y="1180" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- ACT 3 — AGENT RAISES PR -> AUTO-SUBSCRIBE -> SUMMARY          -->
+        <!-- ============================================================ -->
+        <mxCell id="act3" value="3. AGENT RAISES PR&#160;&#160;—&#160;&#160;webhook fan-out → auto-subscribe → summaries push back" style="text;html=1;strokeColor=#d79b00;fillColor=#ffe6cc;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1210" width="2160" height="34" as="geometry" />
+        </mxCell>
+
+        <!-- 3.1 agent -> GitHub gh pr create -->
+        <mxCell id="e25" value="exec gh pr create  (uses user PAT; sender = user)" style="endArrow=classic;html=1;strokeColor=#d79b00;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="200" y="1275" as="sourcePoint" />
+            <mxPoint x="1480" y="1275" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.2 GitHub -> Hub webhook -->
+        <mxCell id="e26" value="POST /webhooks/github  X-GitHub-Event: pull_request  action=opened  sender.id=USER_ID" style="endArrow=classic;html=1;strokeColor=#666666;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1480" y="1310" as="sourcePoint" />
+            <mxPoint x="1160" y="1310" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.3 Hub -> SQLite token lookup -->
+        <mxCell id="e27" value="SELECT * FROM tokens WHERE github_user_id = USER_ID AND revoked_at IS NULL" style="endArrow=classic;html=1;strokeColor=#999999;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="1345" as="sourcePoint" />
+            <mxPoint x="2120" y="1345" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.4 Hub -> MCP pr_opened event -->
+        <mxCell id="e28" value="event: pr_opened  data: { owner, repo, number, head_sha, author_login }" style="endArrow=classic;html=1;strokeColor=#9673a6;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="1380" as="sourcePoint" />
+            <mxPoint x="520" y="1380" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.5 MCP -> Hub per-PR SSE subscribe -->
+        <mxCell id="e29" value="GET /sse/:owner/:repo/:number  (auth + RequireRepoScope + RequireRepoAccess)" style="endArrow=classic;html=1;strokeColor=#d79b00;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="1415" as="sourcePoint" />
+            <mxPoint x="1160" y="1415" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.6 Hub -> GitHub permission check -->
+        <mxCell id="e30" value="GET /repos/{owner}/{repo}/collaborators/{user}/permission&#xa;(installation token; cache 5min/60s)" style="endArrow=classic;html=1;strokeColor=#3366cc;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="1455" as="sourcePoint" />
+            <mxPoint x="1480" y="1455" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.7 GitHub -> Hub permission -->
+        <mxCell id="e31" value="200 { permission: read|write|admin }" style="endArrow=classic;html=1;strokeColor=#666666;dashed=1;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1480" y="1495" as="sourcePoint" />
+            <mxPoint x="1160" y="1495" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.8 Hub -> MCP per-PR SSE held -->
+        <mxCell id="e32" value="200 text/event-stream (held open)" style="endArrow=classic;html=1;strokeColor=#d79b00;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="1530" as="sourcePoint" />
+            <mxPoint x="520" y="1530" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.9 Maintainer -> GitHub post review/comment/CI -->
+        <mxCell id="e33" value="post review / comment  ·  CI completes" style="endArrow=classic;html=1;strokeColor=#d79b00;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1800" y="1565" as="sourcePoint" />
+            <mxPoint x="1480" y="1565" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.10 GitHub -> Hub webhook -->
+        <mxCell id="e34" value="POST /webhooks/github  (issue_comment / pull_request_review / check_suite)" style="endArrow=classic;html=1;strokeColor=#666666;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1480" y="1600" as="sourcePoint" />
+            <mxPoint x="1160" y="1600" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.11 Hub -> MCP summary -->
+        <mxCell id="e35" value="event: summary  (after 30s settle)" style="endArrow=classic;html=1;strokeColor=#d79b00;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1160" y="1635" as="sourcePoint" />
+            <mxPoint x="520" y="1635" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3.12 MCP -> Agent -->
+        <mxCell id="e36" value="agent reads via get_pending tool" style="endArrow=classic;html=1;strokeColor=#d79b00;dashed=1;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="520" y="1665" as="sourcePoint" />
+            <mxPoint x="200" y="1665" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="legend" value="solid blue → request    dashed coloured → response (held SSE)    dashed grey → external response    grey → DB write" style="text;html=1;strokeColor=#cccccc;fillColor=#f5f5f5;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1690" width="2160" height="20" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
