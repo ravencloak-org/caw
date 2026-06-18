@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -225,4 +226,35 @@ func getPending(t *testing.T, url, token string) []store.PendingItem {
 		t.Fatalf("decode pending: %v", err)
 	}
 	return body.Items
+}
+
+// TestLandingPage: GET / returns the embedded static landing page, with no
+// auth token in the request — proving the route is registered before the
+// auth middleware.
+func TestLandingPage(t *testing.T) {
+	ts, _ := newTestServer(t, time.Hour)
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("get /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html prefix", ct)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	s := string(body)
+	if !strings.Contains(s, "caw") {
+		t.Fatalf("body missing %q", "caw")
+	}
+	if !strings.Contains(s, "github.com/ravencloak-org/caw") {
+		t.Fatalf("body missing %q", "github.com/ravencloak-org/caw")
+	}
 }

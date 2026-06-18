@@ -30,6 +30,9 @@ func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte,
 	if mintFn != nil {
 		h.WithMintFunc(mintFn)
 	}
+	r.GET("/", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", landingHTML)
+	})
 	r.POST("/webhooks/github", h.HandleWebhook)
 	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
