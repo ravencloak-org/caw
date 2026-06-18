@@ -55,9 +55,15 @@ TABLE_COMMENTS = {
     ),
     "tokens": (
         "-- Hub-minted installation tokens for SSE / get_pending auth (ADR-0003).\n"
-        "-- Only the hash is stored; the raw token is shown once at mint time."
+        "-- Only the hash is stored; the raw token is shown once at mint time.\n"
+        "-- Auth v2 adds user-binding columns (id ULID, github_user_id, device_label,\n"
+        "-- expires_at, last_used_at, revoked_at); legacy rows keep github_user_id NULL\n"
+        "-- and device_label='legacy'."
     ),
-    "installations": "-- GitHub App installations. One row per installation_id.",
+    "installations": (
+        "-- GitHub App installations. One row per installation_id.\n"
+        "-- app_slug carries the App's URL slug (Auth v2) for /apps/<slug>/installations/new."
+    ),
     "installation_repos": "-- Repos associated with each installation.",
     "leases": (
         "-- Rebase leases: at most one holder per PR at any time (ADR-0005).\n"
@@ -67,6 +73,11 @@ TABLE_COMMENTS = {
     "app_credentials": (
         "-- GitHub App credentials persisted after the manifest conversion flow.\n"
         "-- Only one row ever exists (single-app deployment); enforced by CHECK (id = 1)."
+    ),
+    "auth_sessions": (
+        "-- OAuth login sessions for MCP-initiated `login` handoffs (Auth v2).\n"
+        "-- Short-lived (10 min). PKCE-bound; mode is 'loopback' or 'device'.\n"
+        "-- A purger sweeps expired rows every 15 min."
     ),
 }
 
@@ -78,7 +89,10 @@ COLUMN_COMMENTS = {
         "external_id": "-- per-source id for replace/dedupe",
     },
     "tokens": {
-        "token_hash": "-- hex sha256 of the raw token",
+        "token_hash":      "-- hex sha256 of the raw token",
+        "id":              "-- ULID; backfill in code path (legacy rows → 'legacy-<rowid>')",
+        "github_user_id":  "-- nullable until v0.4.0",
+        "expires_at":      "-- NULL = no expiry (legacy)",
     },
     "installation_repos": {
         "full_name": '-- "owner/repo"',
@@ -87,6 +101,18 @@ COLUMN_COMMENTS = {
         "holder":            "-- installation_id of current holder",
         "expires_at":        "-- Unix epoch; grant duration set by Hub",
         "last_heartbeat_at": "-- updated by holder; orphan detection uses this",
+    },
+    "installations": {
+        "app_slug": '-- GitHub App slug, e.g. "caw-ravencloak" (Auth v2)',
+    },
+    "auth_sessions": {
+        "id":                    "-- ULID",
+        "mode":                  '-- "loopback" | "device"',
+        "code_challenge":        "-- S256 hash, base64url",
+        "code_challenge_method": '-- "S256"',
+        "github_user_id":        "-- set after OAuth callback",
+        "pending_bundle_json":   "-- TokenBundle awaiting pickup (device flow)",
+        "state":                 "-- pending|awaiting_install|awaiting_picker|delivered|cancelled|expired",
     },
 }
 
@@ -101,6 +127,7 @@ TABLE_ORDER = [
     "installation_repos",
     "leases",
     "app_credentials",
+    "auth_sessions",
 ]
 
 
@@ -288,7 +315,7 @@ def format_sqlite_table(tdef: TableDef) -> str:
     for col_name, col_def in tdef.columns:
         translated = translate_col_def(col_def, sqlite_type)
         comment = col_comments.get(col_name, "")
-        col_line = f"    {col_name:<20}{translated}"
+        col_line = f"    {col_name}{' ' * max(1, 20 - len(col_name))}{translated}"
         if comment:
             entries.append((col_line, comment))
         else:
@@ -326,7 +353,7 @@ def format_postgres_table(tdef: TableDef) -> str:
         translated = translate_col_def(col_def, postgres_type)
         comment = col_comments.get(col_name, "")
         ident = pg_quote_ident(col_name)
-        col_line = f"    {ident:<22}{translated}"
+        col_line = f"    {ident}{' ' * max(1, 22 - len(ident))}{translated}"
         if comment:
             entries.append((col_line, comment))
         else:

@@ -53,19 +53,35 @@ CREATE TABLE IF NOT EXISTS signals (
 
 -- Hub-minted installation tokens for SSE / get_pending auth (ADR-0003).
 -- Only the hash is stored; the raw token is shown once at mint time.
+-- Auth v2 adds user-binding columns (id ULID, github_user_id, device_label,
+-- expires_at, last_used_at, revoked_at); legacy rows keep github_user_id NULL
+-- and device_label='legacy'.
 CREATE TABLE IF NOT EXISTS tokens (
     token_hash            TEXT NOT NULL,   -- hex sha256 of the raw token
     installation_id       TEXT NOT NULL,
     org                   TEXT NOT NULL DEFAULT '',
     created_at            BIGINT NOT NULL,
+    id                    TEXT NOT NULL DEFAULT '',   -- ULID; backfill in code path (legacy rows → 'legacy-<rowid>')
+    github_user_id        BIGINT,   -- nullable until v0.4.0
+    github_user_login     TEXT,
+    device_label          TEXT NOT NULL DEFAULT 'legacy',
+    expires_at            BIGINT,   -- NULL = no expiry (legacy)
+    last_used_at          BIGINT,
+    revoked_at            BIGINT,
     PRIMARY KEY (token_hash)
 );
 
+CREATE INDEX IF NOT EXISTS tokens_expires_active ON tokens (revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS tokens_installation ON tokens (installation_id);
+CREATE INDEX IF NOT EXISTS tokens_user ON tokens (github_user_id);
+
 -- GitHub App installations. One row per installation_id.
+-- app_slug carries the App's URL slug (Auth v2) for /apps/<slug>/installations/new.
 CREATE TABLE IF NOT EXISTS installations (
     installation_id       TEXT NOT NULL,
     account_login         TEXT NOT NULL,
     created_at            BIGINT NOT NULL,
+    app_slug              TEXT NOT NULL DEFAULT '',   -- GitHub App slug, e.g. "caw-ravencloak" (Auth v2)
     PRIMARY KEY (installation_id)
 );
 
@@ -105,6 +121,31 @@ CREATE TABLE IF NOT EXISTS app_credentials (
     PRIMARY KEY (id),
     CHECK (id = 1)
 );
+
+-- OAuth login sessions for MCP-initiated `login` handoffs (Auth v2).
+-- Short-lived (10 min). PKCE-bound; mode is 'loopback' or 'device'.
+-- A purger sweeps expired rows every 15 min.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id                    TEXT NOT NULL,   -- ULID
+    mode                  TEXT NOT NULL,   -- "loopback" | "device"
+    code_challenge        TEXT NOT NULL,   -- S256 hash, base64url
+    code_challenge_method TEXT NOT NULL,   -- "S256"
+    loopback_redirect     TEXT,
+    device_code           TEXT,
+    user_code             TEXT,
+    client_label          TEXT NOT NULL,
+    github_user_id        BIGINT,   -- set after OAuth callback
+    github_user_login     TEXT,
+    pending_bundle_json   TEXT,   -- TokenBundle awaiting pickup (device flow)
+    state                 TEXT NOT NULL DEFAULT 'pending',   -- pending|awaiting_install|awaiting_picker|delivered|cancelled|expired
+    created_at            BIGINT NOT NULL,
+    expires_at            BIGINT NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_auth_sessions_device UNIQUE (device_code),
+    CONSTRAINT uq_auth_sessions_user_code UNIQUE (user_code)
+);
+
+CREATE INDEX IF NOT EXISTS auth_sessions_expires ON auth_sessions (expires_at);
 
 -- Partial index for efficient expired-lease sweeps (Postgres only).
 -- SQLite uses the plain leases_expires index defined above.

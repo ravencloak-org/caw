@@ -24,7 +24,7 @@ import (
 // registered (ADR-0010 — self-service Watcher token issuance).
 // mintFn is optional: when non-nil it is passed to the Hub so that installation
 // "created" webhook events automatically mint a Hub token.
-func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, ich *hub.InstallCallbackHandler, mintFn func(installationID, org string) (string, error)) *gin.Engine {
+func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, ich *hub.InstallCallbackHandler, mintFn hub.MintFunc) *gin.Engine {
 	r := gin.New()
 	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
 

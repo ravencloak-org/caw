@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -26,16 +27,63 @@ type Store struct {
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
+//
+// Schema bootstrap: schema.sql is `CREATE TABLE IF NOT EXISTS …` so it is a
+// no-op on tables that already exist. To migrate v0.1.x databases online (which
+// pre-date the Auth v2 token columns and the auth_sessions / installations.app_slug
+// additions) Open also runs the additive migrations slice — each statement is
+// idempotent because we swallow only the "duplicate column name" error SQLite
+// raises when the column was already added. No data is touched.
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	// Migrations FIRST: a v0.1.x DB has the legacy tokens / installations
+	// tables but lacks the Auth v2 columns. schema.sql's CREATE INDEX
+	// statements reference those columns, so they'd fail if applied first.
+	// On a fresh DB the tables don't exist yet — applyMigrations swallows
+	// the "no such table" error so the bootstrap path keeps working.
+	if err := applyMigrations(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+// migrations contains additive schema statements that schema.sql's
+// `CREATE TABLE IF NOT EXISTS` cannot apply to a pre-existing table. They are
+// run after schema.sql on every Open; "duplicate column name" is treated as
+// success so the call is idempotent across re-boots.
+var migrations = []string{
+	`ALTER TABLE tokens ADD COLUMN id                TEXT    NOT NULL DEFAULT ''`,
+	`ALTER TABLE tokens ADD COLUMN github_user_id    INTEGER`,
+	`ALTER TABLE tokens ADD COLUMN github_user_login TEXT`,
+	`ALTER TABLE tokens ADD COLUMN device_label      TEXT    NOT NULL DEFAULT 'legacy'`,
+	`ALTER TABLE tokens ADD COLUMN expires_at        INTEGER`,
+	`ALTER TABLE tokens ADD COLUMN last_used_at      INTEGER`,
+	`ALTER TABLE tokens ADD COLUMN revoked_at        INTEGER`,
+	`ALTER TABLE installations ADD COLUMN app_slug   TEXT    NOT NULL DEFAULT ''`,
+}
+
+// applyMigrations runs each entry in migrations, swallowing the SQLite
+// "duplicate column name" error so re-applying is a no-op.
+func applyMigrations(db *sql.DB) error {
+	for _, stmt := range migrations {
+		if _, err := db.Exec(stmt); err != nil {
+			msg := err.Error()
+			if strings.Contains(msg, "duplicate column name") ||
+				strings.Contains(msg, "no such table") {
+				continue
+			}
+			return fmt.Errorf("migration %q: %w", stmt, err)
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.
@@ -268,33 +316,265 @@ func (s *Store) LatestRoundSHA(owner, repo string, number int) (sha string, ok b
 	}
 }
 
-// InsertToken stores a hashed installation token (ADR-0003).
-func (s *Store) InsertToken(tokenHash, installationID, org string) error {
+// Token is one row of the tokens table (ADR-0003 + Auth v2 user-binding fields).
+//
+// Phase 1 widens the row but does not yet enforce the user check. Legacy rows
+// minted before Auth v2 (and rows still minted by the install-callback and
+// installation.created webhook paths) carry GitHubUserID == nil and
+// DeviceLabel == "legacy" / "installation-auto"; Phase 2's RequireRepoAccess
+// skips them. Phase 3 mints user-bound rows where GitHubUserID is set.
+type Token struct {
+	ID              string // 26-char ULID; legacy rows are backfilled to "legacy-<rowid>" on first VerifyToken read
+	Hash            string // hex sha256 of the raw token
+	InstallationID  string
+	Org             string
+	GitHubUserID    *int64 // nil = legacy / not yet user-bound
+	GitHubUserLogin string
+	DeviceLabel     string // "legacy" | "installation-auto" | "manifest-setup" | user-supplied label
+	CreatedAt       int64  // Unix epoch seconds
+	ExpiresAt       *int64 // nil = no expiry (legacy)
+	LastUsedAt      *int64
+	RevokedAt       *int64
+}
+
+// InsertTokenRow writes a Token row in its full Auth v2 shape. Callers MUST
+// supply Hash, InstallationID and DeviceLabel; ID is auto-generated only when
+// empty; CreatedAt is set to now when zero. ON CONFLICT(token_hash) updates
+// every mutable column so re-minting the same hash overwrites stale metadata.
+func (s *Store) InsertTokenRow(t Token) error {
+	if t.Hash == "" {
+		return fmt.Errorf("insert token row: Hash is required")
+	}
+	if t.DeviceLabel == "" {
+		t.DeviceLabel = "legacy"
+	}
+	if t.CreatedAt == 0 {
+		t.CreatedAt = time.Now().Unix()
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO tokens (token_hash, installation_id, org, created_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(token_hash) DO UPDATE SET installation_id = excluded.installation_id, org = excluded.org`,
-		tokenHash, installationID, org, time.Now().Unix(),
+		`INSERT INTO tokens (token_hash, installation_id, org, created_at,
+		                     id, github_user_id, github_user_login, device_label,
+		                     expires_at, last_used_at, revoked_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(token_hash) DO UPDATE SET
+		     installation_id   = excluded.installation_id,
+		     org               = excluded.org,
+		     id                = excluded.id,
+		     github_user_id    = excluded.github_user_id,
+		     github_user_login = excluded.github_user_login,
+		     device_label      = excluded.device_label,
+		     expires_at        = excluded.expires_at,
+		     last_used_at      = excluded.last_used_at,
+		     revoked_at        = excluded.revoked_at`,
+		t.Hash, t.InstallationID, t.Org, t.CreatedAt,
+		t.ID, nullableInt(t.GitHubUserID), nullableString(t.GitHubUserLogin), t.DeviceLabel,
+		nullableInt(t.ExpiresAt), nullableInt(t.LastUsedAt), nullableInt(t.RevokedAt),
 	)
 	if err != nil {
-		return fmt.Errorf("insert token: %w", err)
+		return fmt.Errorf("insert token row: %w", err)
 	}
 	return nil
 }
 
-// VerifyToken resolves a token hash to its installation id. ok is false when the
-// token is unknown. It satisfies the auth.Verifier interface.
-func (s *Store) VerifyToken(tokenHash string) (installationID string, ok bool, err error) {
-	err = s.db.QueryRow(
-		`SELECT installation_id FROM tokens WHERE token_hash = ?`, tokenHash,
-	).Scan(&installationID)
+// InsertToken stores a hashed installation token (ADR-0003) in legacy shape.
+//
+// Deprecated: use InsertTokenRow with a fully populated Token. This wrapper is
+// kept for one release so the v0.1 surface stays usable while the Auth v2 code
+// paths land phase-by-phase; Phase 5 removes it.
+func (s *Store) InsertToken(tokenHash, installationID, org string) error {
+	return s.InsertTokenRow(Token{
+		Hash:           tokenHash,
+		InstallationID: installationID,
+		Org:            org,
+		DeviceLabel:    "legacy",
+	})
+}
+
+// VerifyToken resolves a token hash to the full Token row. ok is false when the
+// token is unknown, has been revoked, or is past its expiry. It satisfies the
+// auth.Verifier interface.
+//
+// Filtering on revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)
+// is intentional: revocation and expiry MUST be checked on the hot path; the
+// new token rows (Phase 3+) set them, legacy rows leave both NULL and remain
+// usable.
+//
+// Legacy backfill: rows that pre-date the Auth v2 `id` column carry id = ''.
+// First read populates id with "legacy-<rowid>" so downstream code (e.g.
+// RevokeToken, ListTokensForUser) always has a stable identifier. Idempotent:
+// the UPDATE is guarded on id IS NULL OR id = '' so re-reads are no-ops.
+func (s *Store) VerifyToken(tokenHash string) (Token, bool, error) {
+	var t Token
+	var rowid int64
+	var id, gul, dl sql.NullString
+	var guid, exp, lu, rev sql.NullInt64
+	now := time.Now().Unix()
+	err := s.db.QueryRow(
+		`SELECT rowid, token_hash, installation_id, org, created_at,
+		        id, github_user_id, github_user_login, device_label,
+		        expires_at, last_used_at, revoked_at
+		 FROM tokens
+		 WHERE token_hash = ?
+		   AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > ?)`,
+		tokenHash, now,
+	).Scan(
+		&rowid, &t.Hash, &t.InstallationID, &t.Org, &t.CreatedAt,
+		&id, &guid, &gul, &dl, &exp, &lu, &rev,
+	)
 	switch {
 	case err == sql.ErrNoRows:
-		return "", false, nil
+		return Token{}, false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("verify token: %w", err)
-	default:
-		return installationID, true, nil
+		return Token{}, false, fmt.Errorf("verify token: %w", err)
 	}
+	t.ID = id.String
+	t.DeviceLabel = dl.String
+	if t.DeviceLabel == "" {
+		t.DeviceLabel = "legacy"
+	}
+	if guid.Valid {
+		v := guid.Int64
+		t.GitHubUserID = &v
+	}
+	t.GitHubUserLogin = gul.String
+	if exp.Valid {
+		v := exp.Int64
+		t.ExpiresAt = &v
+	}
+	if lu.Valid {
+		v := lu.Int64
+		t.LastUsedAt = &v
+	}
+	if rev.Valid {
+		v := rev.Int64
+		t.RevokedAt = &v
+	}
+	if t.ID == "" {
+		t.ID = fmt.Sprintf("legacy-%d", rowid)
+		// Backfill — guarded so concurrent VerifyToken calls converge on the
+		// same value (rowid is stable per row). Errors are not fatal: the
+		// auth check has already succeeded, the legacy row is usable, and
+		// the next read will retry the backfill.
+		_, _ = s.db.Exec(
+			`UPDATE tokens SET id = ? WHERE token_hash = ? AND (id IS NULL OR id = '')`,
+			t.ID, tokenHash,
+		)
+	}
+	return t, true, nil
+}
+
+// TouchTokenLastUsed sets the token's last_used_at to now. Best-effort: a zero
+// rows-affected (row revoked / expired between auth and writeback) is not an
+// error. Callers should debounce — once per 60s per token id — to avoid
+// hot-row contention on busy tokens.
+func (s *Store) TouchTokenLastUsed(tokenID string, now int64) error {
+	if tokenID == "" {
+		return nil
+	}
+	if _, err := s.db.Exec(
+		`UPDATE tokens SET last_used_at = ? WHERE id = ?`, now, tokenID,
+	); err != nil {
+		return fmt.Errorf("touch token: %w", err)
+	}
+	return nil
+}
+
+// RevokeToken sets revoked_at = now for the token with the given id. The row
+// stays in the table for audit; VerifyToken's WHERE clause filters it out on
+// the next presentation. Returns no error if the id matches no row — the
+// caller has already authenticated and revoke is naturally idempotent.
+func (s *Store) RevokeToken(tokenID string, now int64) error {
+	if tokenID == "" {
+		return fmt.Errorf("revoke token: id is required")
+	}
+	if _, err := s.db.Exec(
+		`UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
+		now, tokenID,
+	); err != nil {
+		return fmt.Errorf("revoke token: %w", err)
+	}
+	return nil
+}
+
+// ListTokensForUser returns every token row bound to the given github_user_id.
+// Used by Phase 4's `/me/tokens` page and Phase 3.5's webhook fan-out. Revoked
+// rows are included so the management UI can show them; callers filter as
+// needed. Returns an empty slice when the user has no tokens (legacy callers
+// with userID == 0 get zero rows, since no legacy row carries a user id).
+func (s *Store) ListTokensForUser(userID int64) ([]Token, error) {
+	rows, err := s.db.Query(
+		`SELECT rowid, token_hash, installation_id, org, created_at,
+		        id, github_user_id, github_user_login, device_label,
+		        expires_at, last_used_at, revoked_at
+		 FROM tokens
+		 WHERE github_user_id = ?
+		 ORDER BY created_at DESC, rowid DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list tokens for user: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Token
+	for rows.Next() {
+		var t Token
+		var rowid int64
+		var id, gul, dl sql.NullString
+		var guid, exp, lu, rev sql.NullInt64
+		if err := rows.Scan(
+			&rowid, &t.Hash, &t.InstallationID, &t.Org, &t.CreatedAt,
+			&id, &guid, &gul, &dl, &exp, &lu, &rev,
+		); err != nil {
+			return nil, fmt.Errorf("list tokens scan: %w", err)
+		}
+		t.ID = id.String
+		if t.ID == "" {
+			t.ID = fmt.Sprintf("legacy-%d", rowid)
+		}
+		t.DeviceLabel = dl.String
+		if guid.Valid {
+			v := guid.Int64
+			t.GitHubUserID = &v
+		}
+		t.GitHubUserLogin = gul.String
+		if exp.Valid {
+			v := exp.Int64
+			t.ExpiresAt = &v
+		}
+		if lu.Valid {
+			v := lu.Int64
+			t.LastUsedAt = &v
+		}
+		if rev.Valid {
+			v := rev.Int64
+			t.RevokedAt = &v
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list tokens iterate: %w", err)
+	}
+	return out, nil
+}
+
+// nullableInt converts a *int64 to a database value: nil pointer → SQL NULL,
+// non-nil → its dereferenced value.
+func nullableInt(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// nullableString returns SQL NULL for an empty string. The Token type uses
+// "" rather than *string for GitHubUserLogin to keep the API ergonomic.
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // UpsertInstallation inserts or replaces a GitHub App installation record.
@@ -306,6 +586,24 @@ func (s *Store) UpsertInstallation(installationID, accountLogin string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("upsert installation: %w", err)
+	}
+	return nil
+}
+
+// UpdateInstallationAppSlug records the GitHub App's URL slug for an
+// installation. Called from the webhook ingest of installation.created and
+// from the manifest-flow callback so the Auth v2 redirect-to-install path
+// (Phase 3) can build https://github.com/apps/<slug>/installations/new for an
+// unauthenticated user mid-OAuth. A blank slug is allowed (no-op write).
+func (s *Store) UpdateInstallationAppSlug(installationID, slug string) error {
+	if installationID == "" {
+		return fmt.Errorf("update installation app_slug: installation_id is required")
+	}
+	if _, err := s.db.Exec(
+		`UPDATE installations SET app_slug = ? WHERE installation_id = ?`,
+		slug, installationID,
+	); err != nil {
+		return fmt.Errorf("update installation app_slug: %w", err)
 	}
 	return nil
 }

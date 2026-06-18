@@ -35,7 +35,7 @@ type Hub struct {
 	store   *store.Store
 	secret  []byte
 	settler *settle.Engine                                   // may be nil (e.g. in unit tests of pure ingest)
-	mintFn  func(installationID, org string) (string, error) // nil → no auto-minting
+	mintFn  MintFunc // nil → no auto-minting
 }
 
 // New constructs a Hub. settler may be nil, in which case settles are not scheduled.
@@ -45,7 +45,7 @@ func New(st *store.Store, secret []byte, settler *settle.Engine) *Hub {
 
 // WithMintFunc sets the function called to mint a Hub token when an
 // installation "created" event is received. Returns Hub for chaining.
-func (h *Hub) WithMintFunc(fn func(installationID, org string) (string, error)) *Hub {
+func (h *Hub) WithMintFunc(fn MintFunc) *Hub {
 	h.mintFn = fn
 	return h
 }
@@ -277,7 +277,11 @@ func (h *Hub) handleInstallation(env github.Envelope) error {
 			}
 		}
 		if h.mintFn != nil {
-			if _, err := h.mintFn(installID, org); err != nil {
+			// Phase 1 widens to the new MintFunc shape but keeps the legacy
+			// "no user binding" semantics this path inherits from v0.1.x:
+			// userID=0 and deviceLabel="installation-auto" so the row is
+			// recognisable in audit logs and Phase 5 can safely sunset it.
+			if _, _, err := h.mintFn(installID, org, "installation-auto", 0, ""); err != nil {
 				// Non-fatal: log but do not fail the webhook; token can be minted later.
 				log.Printf("mint token for installation %s: %v", installID, err)
 			}

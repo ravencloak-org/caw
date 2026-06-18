@@ -43,7 +43,7 @@ type InstallCallbackHandler struct {
 	githubBase string
 	apiBase    string
 	credsFn    func() (clientID, clientSecret string, ok bool, err error)
-	mintFn     func(installationID, org string) (string, error)
+	mintFn     MintFunc
 	httpClient HTTPDoer
 	tmpl       *template.Template
 }
@@ -74,13 +74,23 @@ type InstallCallbackConfig struct {
 	// store.LoadAppCredentials() so a hand-registered App that lives in env
 	// works alongside a manifest-registered App that lives in the DB.
 	CredsFn func() (clientID, clientSecret string, ok bool, err error)
-	// MintFn issues a Watcher token bound to (installationID, org); same function the
-	// `hub mint-token` CLI subcommand uses, returning the raw token (shown once).
-	MintFn func(installationID, org string) (string, error)
+	// MintFn issues a Watcher token bound to (installationID, org, deviceLabel,
+	// userID, userLogin). It is the same function the `hub mint-token` CLI
+	// subcommand and the installation.created webhook auto-mint path use.
+	// Returns the raw token (shown once) and the persisted token id (CHAR(26)
+	// ULID; for revoke / list / audit). Phase 1 still calls it with userID=0
+	// from the install-callback path (legacy semantics, no user binding); Phase
+	// 3 begins issuing user-bound tokens through the /auth/* surface.
+	MintFn MintFunc
 	// HTTPClient overrides the HTTP client used for GitHub OAuth + REST calls.
 	// Defaults to http.DefaultClient.
 	HTTPClient HTTPDoer
 }
+
+// MintFunc is the signature for the Hub's token mint function. It is shared by
+// every issuance path (CLI, manifest callback, install callback, webhook
+// auto-mint, Auth v2 /auth/picker handler in Phase 3+).
+type MintFunc func(installationID, org, deviceLabel string, userID int64, userLogin string) (rawToken string, tokenID string, err error)
 
 // NewInstallCallbackHandler constructs an InstallCallbackHandler from cfg.
 func NewInstallCallbackHandler(cfg InstallCallbackConfig) (*InstallCallbackHandler, error) {
@@ -169,7 +179,12 @@ func (h *InstallCallbackHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	rawToken, err := h.mintFn(installID, accountLogin)
+	// Phase 1 keeps the install-callback path on legacy semantics: no user
+	// binding (userID=0) and DeviceLabel="legacy", so VerifyToken returns the
+	// row with GitHubUserID == nil and Phase 2's RequireRepoAccess bypasses
+	// it. Phase 3's /auth/picker handler is the path that mints user-bound
+	// tokens through the same MintFunc.
+	rawToken, _, err := h.mintFn(installID, accountLogin, "legacy", 0, "")
 	if err != nil {
 		log.Printf("install callback: mint: %v", err)
 		c.String(http.StatusInternalServerError, "mint failed")
