@@ -161,46 +161,72 @@ func installReq(installID, setupAction, code string) *http.Request {
 	return httptest.NewRequest(http.MethodGet, target, nil)
 }
 
+// assertErrorPage verifies w carries an install_error.html render at the given
+// status with the expected error-code badge + each wantSubstrings literal. Used
+// by every failure-path test so the bare-text-body assertions stay gone.
+func assertErrorPage(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, wantCode string, wantSubstrings ...string) {
+	t.Helper()
+	if w.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body=%q", w.Code, wantStatus, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html prefix", ct)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	body := w.Body.String()
+	if !strings.HasPrefix(strings.TrimSpace(body), "<!DOCTYPE html>") {
+		t.Errorf("body does not start with <!DOCTYPE html>; first 80 bytes=%q", firstN(body, 80))
+	}
+	// Error code is rendered in a <code> badge in the sub-line.
+	if wantCode != "" && !strings.Contains(body, ">"+wantCode+"<") {
+		t.Errorf("body missing rendered error code %q; body=%q", wantCode, body)
+	}
+	for _, s := range wantSubstrings {
+		if !strings.Contains(body, s) {
+			t.Errorf("body missing substring %q; body=%q", s, body)
+		}
+	}
+}
+
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 func TestInstallCallback_MissingInstallationID(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("", "install", "code123"))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "installation_id") {
-		t.Fatalf("body = %q, want mention of installation_id", w.Body.String())
-	}
+	assertErrorPage(t, w, http.StatusBadRequest, "missing_installation_id", "installation_id", "Restart login")
 }
 
 func TestInstallCallback_WrongSetupAction(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, installReq("123", "update", "code"))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
+	// "update" is now a valid soft-redirect (see TestInstallCallback_SetupActionUpdate);
+	// only genuinely unknown values trigger this branch.
+	r.ServeHTTP(w, installReq("123", "garbage", "code"))
+	assertErrorPage(t, w, http.StatusBadRequest, "unsupported_setup_action", "setup_action=garbage")
 }
 
 func TestInstallCallback_MissingOAuthCode(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", ""))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "OAuth") {
-		t.Fatalf("body = %q, want mention of OAuth", w.Body.String())
-	}
+	assertErrorPage(t, w, http.StatusBadRequest, "missing_oauth_code",
+		"OAuth", `Request user authorization (OAuth)`)
 }
 
 func TestInstallCallback_NoCreds(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, callbackTestOpts{})
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusFailedDependency {
-		t.Fatalf("status = %d, want 424", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusFailedDependency, "no_credentials",
+		"CAW_APP_CLIENT_ID", "manifest")
 }
 
 func TestInstallCallback_PartialCreds(t *testing.T) {
@@ -209,9 +235,7 @@ func TestInstallCallback_PartialCreds(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, opts)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusFailedDependency {
-		t.Fatalf("status = %d, want 424", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusFailedDependency, "no_credentials")
 }
 
 func TestInstallCallback_CredsLookupError(t *testing.T) {
@@ -219,9 +243,7 @@ func TestInstallCallback_CredsLookupError(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, opts)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusInternalServerError, "creds_lookup_failed")
 }
 
 func TestInstallCallback_OAuthExchangeFails(t *testing.T) {
@@ -229,9 +251,7 @@ func TestInstallCallback_OAuthExchangeFails(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "bad-code"))
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusBadGateway, "oauth_exchange_failed", "OAuth")
 }
 
 func TestInstallCallback_OAuthExchangeReturnsNoToken(t *testing.T) {
@@ -239,9 +259,7 @@ func TestInstallCallback_OAuthExchangeReturnsNoToken(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusBadGateway, "oauth_exchange_failed")
 }
 
 func TestInstallCallback_OAuthMalformedJSON(t *testing.T) {
@@ -249,9 +267,7 @@ func TestInstallCallback_OAuthMalformedJSON(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusBadGateway, "oauth_exchange_failed")
 }
 
 func TestInstallCallback_InstallationsAPIFails(t *testing.T) {
@@ -259,9 +275,7 @@ func TestInstallCallback_InstallationsAPIFails(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusBadGateway, "installations_lookup_failed")
 }
 
 func TestInstallCallback_UserNotAdminOfInstallation(t *testing.T) {
@@ -270,9 +284,7 @@ func TestInstallCallback_UserNotAdminOfInstallation(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusForbidden, "not_an_admin", "admin")
 }
 
 func TestInstallCallback_HappyPath(t *testing.T) {
@@ -337,8 +349,106 @@ func TestInstallCallback_MintFails(t *testing.T) {
 	r, _ := newInstallCallbackForTest(t, fake, opts)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", w.Code)
+	assertErrorPage(t, w, http.StatusInternalServerError, "mint_failed")
+}
+
+// TestInstallCallback_SetupActionUpdate covers GitHub's setup_action=update
+// redirect (existing installation reconfigured — e.g. repo added/removed).
+// Behavior changed in Phase 0 of Auth v2: was 400 bare text, now 200 HTML
+// soft-redirect that points the user at /me/tokens (Phase 4 route).
+func TestInstallCallback_SetupActionUpdate(t *testing.T) {
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("139674548", "update", "ignored"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html prefix", ct)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "/me/tokens") {
+		t.Errorf("body missing /me/tokens link; body=%q", body)
+	}
+	if !strings.Contains(body, "hub mint-token") {
+		t.Errorf("body missing self-host rotate hint; body=%q", body)
+	}
+	// The button URL is rooted at the hub baseURL (http://hub.example.com in tests).
+	if !strings.Contains(body, `href="http://hub.example.com/me/tokens"`) {
+		t.Errorf("body missing absolute /me/tokens href; body=%q", body)
+	}
+}
+
+// TestInstallCallback_ErrorPageRendersForMissingInstallationID asserts the
+// install_error.html template renders with all the actionable affordances:
+// title, error-code badge, restart-login button, self-host docs reference.
+// Complements TestInstallCallback_MissingInstallationID, which is a thinner
+// status+substring check.
+func TestInstallCallback_ErrorPageRendersForMissingInstallationID(t *testing.T) {
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("", "install", "code"))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%q", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// Template skeleton.
+	for _, must := range []string{
+		"<!DOCTYPE html>",
+		`<title>caw — `,
+		`<h2>What happened</h2>`,
+		`<h2>What to do</h2>`,
+		// Restart-login button is the prominent CTA.
+		`<a class="btn" href="http://hub.example.com/auth/start-help">Restart login</a>`,
+		// Error code badge.
+		`<code>missing_installation_id</code>`,
+		// Self-host docs anchor lives in the footer of every rendered error.
+		`docs/install/SELF-HOST.md`,
+	} {
+		if !strings.Contains(body, must) {
+			t.Errorf("body missing %q; body=%q", must, body)
+		}
+	}
+	// No-store CSP without script-src — error template has no inline JS.
+	if csp := w.Header().Get("Content-Security-Policy"); strings.Contains(csp, "script-src") {
+		t.Errorf("error page CSP allows script-src; should not (got %q)", csp)
+	}
+}
+
+// TestInstallCallback_ErrorPageRendersForFailedOAuth asserts the OAuth-failure
+// path renders the actionable HTML page rather than the old "OAuth exchange
+// failed" bare-text body. Covers both the 502 status and the restart-login CTA.
+func TestInstallCallback_ErrorPageRendersForFailedOAuth(t *testing.T) {
+	fake := &fakeGitHubAuth{
+		t:           t,
+		oauthStatus: http.StatusUnauthorized,
+		oauthBody:   `{"error":"bad_verification_code","error_description":"The code passed is incorrect or expired."}`,
+	}
+	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("123", "install", "stale-code"))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%q", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html prefix", ct)
+	}
+	body := w.Body.String()
+	for _, must := range []string{
+		"<!DOCTYPE html>",
+		`<code>oauth_exchange_failed</code>`,
+		"OAuth",
+		// Actionable copy explicitly mentions the most-likely cause.
+		"expired",
+		// Restart-login button.
+		`<a class="btn" href="http://hub.example.com/auth/start-help">Restart login</a>`,
+	} {
+		if !strings.Contains(body, must) {
+			t.Errorf("body missing %q; body=%q", must, body)
+		}
 	}
 }
 
@@ -419,7 +529,5 @@ func TestInstallCallback_InstallationsMalformedJSON(t *testing.T) {
 	r.GET("/github/app/install/callback", h.Handle)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", w.Code)
-	}
+	assertErrorPage(t, w, http.StatusBadGateway, "installations_lookup_failed")
 }
