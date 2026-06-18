@@ -95,6 +95,10 @@ Then:
 
 **SaaS:** install the hosted App, install the Watcher, subscribe. (Pricing TBD.)
 
+### Limitations of the default image
+
+> **Default image limitation — orphan rebase.** The published `ghcr.io/ravencloak-org/caw` image is distroless/static and does not include `git`. The orphan-rebase fallback (ADR-0005 — the Hub takes the lease and force-pushes when no agent is listening) requires `git` on PATH. If your workflow depends on orphan rebase, run the binary on a host with `git` installed rather than the default container, or build a custom image based on `alpine:3` with `git` + `bash` added. Live-path rebase (where the agent holds the lease and pushes from its own worktree, ADR-0002) is unaffected — that runs in the agent's environment, not in the Hub.
+
 ## Observability
 
 The Hub is instrumented with the **OpenTelemetry Go SDK** and emits traces/logs/metrics over **OTLP** to a configurable endpoint — it stores no telemetry itself and stays vendor-neutral ([ADR-0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)).
