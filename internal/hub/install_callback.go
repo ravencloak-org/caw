@@ -19,6 +19,9 @@ import (
 //go:embed install_callback.html
 var installCallbackHTML string
 
+//go:embed install_error.html
+var installErrorHTML string
+
 // InstallCallbackHandler serves the GitHub App Setup URL callback that mints
 // and one-time-displays a Watcher token after a user installs the App on a
 // repository (ADR-0010 — self-service Watcher token issuance).
@@ -46,6 +49,7 @@ type InstallCallbackHandler struct {
 	mintFn     MintFunc
 	httpClient HTTPDoer
 	tmpl       *template.Template
+	errorTmpl  *template.Template
 }
 
 // HTTPDoer is satisfied by *http.Client and is the seam tests use to stub
@@ -119,6 +123,10 @@ func NewInstallCallbackHandler(cfg InstallCallbackConfig) (*InstallCallbackHandl
 	if err != nil {
 		return nil, fmt.Errorf("NewInstallCallbackHandler parse template: %w", err)
 	}
+	errorTmpl, err := template.New("install_error").Parse(installErrorHTML)
+	if err != nil {
+		return nil, fmt.Errorf("NewInstallCallbackHandler parse error template: %w", err)
+	}
 	return &InstallCallbackHandler{
 		baseURL:    cfg.BaseURL,
 		githubBase: gh,
@@ -127,36 +135,63 @@ func NewInstallCallbackHandler(cfg InstallCallbackConfig) (*InstallCallbackHandl
 		mintFn:     cfg.MintFn,
 		httpClient: hc,
 		tmpl:       tmpl,
+		errorTmpl:  errorTmpl,
 	}, nil
 }
 
 // Handle serves GET /github/app/install/callback.
+//
+// GitHub redirects users here with one of two setup_action values:
+//   - "install" — fresh install; exchange OAuth code, verify the user, mint a token.
+//   - "update"  — installation was reconfigured (e.g. repo added/removed); no new
+//     token is minted, browser lands on a soft-redirect page pointing at /me/tokens
+//     (which lands in Phase 4 of Auth v2 — for now the link 404s and we tell the
+//     user how to rotate via `hub mint-token`).
+//
+// Every failure path renders install_error.html with actionable copy + a Restart
+// login button, instead of a bare-text response. The `code` strings ("missing_oauth_code",
+// "oauth_exchange_failed", etc.) are stable and used both for log correlation and as
+// the lookup key into installErrorCopy for title + next-step bullets.
 func (h *InstallCallbackHandler) Handle(c *gin.Context) {
 	installID := c.Query("installation_id")
 	if installID == "" {
-		c.String(http.StatusBadRequest, "missing installation_id")
+		h.renderError(c, http.StatusBadRequest, "missing_installation_id",
+			"GitHub redirected here without an installation_id query parameter.",
+			h.restartURL())
 		return
 	}
-	if c.Query("setup_action") != "install" {
-		c.String(http.StatusBadRequest, "unexpected setup_action; expected 'install'")
+	switch c.Query("setup_action") {
+	case "install":
+		// fall through to the OAuth + mint flow below.
+	case "update":
+		h.renderSetupActionUpdate(c)
+		return
+	default:
+		h.renderError(c, http.StatusBadRequest, "unsupported_setup_action",
+			"GitHub sent setup_action="+c.Query("setup_action")+", but this endpoint only handles install and update.",
+			h.restartURL())
 		return
 	}
 	code := c.Query("code")
 	if code == "" {
-		c.String(http.StatusBadRequest,
-			`missing OAuth code: enable "Request user authorization (OAuth) during installation" in this App's GitHub settings, then reinstall`)
+		h.renderError(c, http.StatusBadRequest, "missing_oauth_code",
+			`GitHub didn't include an OAuth code. The App's "Request user authorization (OAuth) during installation" checkbox is probably off.`,
+			h.restartURL())
 		return
 	}
 
 	clientID, clientSecret, ok, err := h.credsFn()
 	if err != nil {
 		log.Printf("install callback: load credentials: %v", err)
-		c.String(http.StatusInternalServerError, "credentials lookup failed")
+		h.renderError(c, http.StatusInternalServerError, "creds_lookup_failed",
+			"Hub couldn't load its App credentials from configuration or storage.",
+			"")
 		return
 	}
 	if !ok || clientID == "" || clientSecret == "" {
-		c.String(http.StatusFailedDependency,
-			"App OAuth credentials not configured; set CAW_APP_CLIENT_ID/CAW_APP_CLIENT_SECRET or run the manifest flow")
+		h.renderError(c, http.StatusFailedDependency, "no_credentials",
+			"App OAuth credentials are not configured on this hub.",
+			"")
 		return
 	}
 
@@ -164,18 +199,24 @@ func (h *InstallCallbackHandler) Handle(c *gin.Context) {
 	userToken, err := h.exchangeOAuthCode(ctx, clientID, clientSecret, code)
 	if err != nil {
 		log.Printf("install callback: oauth exchange: %v", err)
-		c.String(http.StatusBadGateway, "OAuth exchange failed")
+		h.renderError(c, http.StatusBadGateway, "oauth_exchange_failed",
+			"GitHub refused to exchange the OAuth code for an access token — the code may have expired or been reused.",
+			h.restartURL())
 		return
 	}
 
 	accountLogin, ok, err := h.userOwnsInstallation(ctx, userToken, installID)
 	if err != nil {
 		log.Printf("install callback: user/installations: %v", err)
-		c.String(http.StatusBadGateway, "GitHub API failed")
+		h.renderError(c, http.StatusBadGateway, "installations_lookup_failed",
+			"Hub couldn't list your GitHub installations after the OAuth exchange — likely a transient GitHub API failure.",
+			h.restartURL())
 		return
 	}
 	if !ok {
-		c.String(http.StatusForbidden, "you do not have admin access to this installation")
+		h.renderError(c, http.StatusForbidden, "not_an_admin",
+			"Your GitHub account isn't an admin of installation "+installID+" — only an admin can mint a token for it.",
+			h.restartURL())
 		return
 	}
 
@@ -187,7 +228,9 @@ func (h *InstallCallbackHandler) Handle(c *gin.Context) {
 	rawToken, _, err := h.mintFn(installID, accountLogin, "legacy", 0, "")
 	if err != nil {
 		log.Printf("install callback: mint: %v", err)
-		c.String(http.StatusInternalServerError, "mint failed")
+		h.renderError(c, http.StatusInternalServerError, "mint_failed",
+			"Hub generated your token but failed to persist it.",
+			"")
 		return
 	}
 
@@ -216,6 +259,181 @@ func (h *InstallCallbackHandler) Handle(c *gin.Context) {
 	if err := h.tmpl.Execute(c.Writer, data); err != nil {
 		// Headers are already written; best we can do is log.
 		log.Printf("install callback: render template: %v", err)
+	}
+}
+
+// errorCopy is the per-code presentation data the install_error.html template
+// renders alongside the per-request longMessage.
+type errorCopy struct {
+	title      string
+	steps      []string
+	retryLabel string
+}
+
+// installErrorCopy maps a stable error code to the title + next-step bullets
+// + retry-button label rendered on the install_error.html page. Adding a new
+// error code means adding a new entry here — the Handle method calls
+// renderError with that code and a per-request longMessage.
+var installErrorCopy = map[string]errorCopy{
+	"missing_installation_id": {
+		title: "Install link is missing the installation id",
+		steps: []string{
+			"Re-open the install flow from your agent — run the login tool, or click the install link in your hub's docs.",
+			"If you opened this URL by hand, the installation_id query parameter is required. The usual cause is a stale browser tab from a half-completed install.",
+		},
+		retryLabel: "Restart login",
+	},
+	"missing_oauth_code": {
+		title: "GitHub didn't send an OAuth code",
+		steps: []string{
+			`Operator: enable "Request user authorization (OAuth) during installation" in this App's settings (Settings → Developer settings → GitHub Apps → Identifying and authorizing users).`,
+			"After flipping the checkbox, reinstall the App on the target repo from github.com/settings/installations — GitHub will redirect back here with a fresh code.",
+			"See docs/install/SELF-HOST.md for screenshots and the exact setting names.",
+		},
+		retryLabel: "Restart login",
+	},
+	"unsupported_setup_action": {
+		title: "Unexpected setup_action",
+		steps: []string{
+			"GitHub only sends setup_action=install or setup_action=update to this URL — anything else means a hand-crafted request or a misconfigured App.",
+			"Restart the install from your agent.",
+		},
+		retryLabel: "Restart login",
+	},
+	"no_credentials": {
+		title: "Hub OAuth credentials aren't configured",
+		steps: []string{
+			"Operator: set CAW_APP_CLIENT_ID and CAW_APP_CLIENT_SECRET on the hub, or complete the manifest flow at /github/app/manifest.",
+			"See docs/install/SELF-HOST.md for the full self-host setup walkthrough.",
+			"Once credentials are present, restart the install from your agent.",
+		},
+		retryLabel: "Restart login",
+	},
+	"creds_lookup_failed": {
+		title: "Hub couldn't load its OAuth credentials",
+		steps: []string{
+			"This is a hub-side internal error — usually a database read failure.",
+			"Operator: check the hub logs for the install-callback line that preceded this page.",
+			"Wait a minute and try again.",
+		},
+		retryLabel: "Restart login",
+	},
+	"oauth_exchange_failed": {
+		title: "OAuth exchange with GitHub failed",
+		steps: []string{
+			"GitHub refused the OAuth code — most likely it expired (codes are good for ~10 minutes) or was reused.",
+			"Restart the install from your agent so GitHub issues a fresh code.",
+		},
+		retryLabel: "Restart login",
+	},
+	"installations_lookup_failed": {
+		title: "GitHub API call failed",
+		steps: []string{
+			"Hub couldn't reach GET /user/installations on GitHub — usually a transient GitHub outage.",
+			"Wait 30 seconds and restart the install from your agent.",
+		},
+		retryLabel: "Restart login",
+	},
+	"not_an_admin": {
+		title: "You don't have admin access to this installation",
+		steps: []string{
+			"This installation belongs to an org or account you can't admin — only an admin can mint a token for it.",
+			"If you meant to install on a personal repo, restart and pick your personal account on the GitHub install page.",
+			"If you're the right user, sign in to GitHub as the admin account first, then restart from your agent.",
+		},
+		retryLabel: "Restart login as the right account",
+	},
+	"mint_failed": {
+		title: "Hub couldn't mint your token",
+		steps: []string{
+			"This is a hub-side internal error — usually a database write failure.",
+			"Operator: check the hub logs for the install-callback line that preceded this page.",
+			"Wait a minute and try again.",
+		},
+		retryLabel: "Restart login",
+	},
+}
+
+// restartURL is where the "Restart login" button on every error page points.
+// In Phase 3 of Auth v2 this lands on the real /auth/start-help handler that
+// tells the user to run the `login` tool in their agent; in Phase 0 the URL
+// 404s, which is acceptable because the on-page bullets already carry the
+// actionable guidance. Centralizing lets Phase 3 rename in one place.
+func (h *InstallCallbackHandler) restartURL() string {
+	return h.baseURL + "/auth/start-help"
+}
+
+// renderError writes install_error.html with HTTP status `status`. `code` is a
+// stable identifier (logged + shown as a small badge on the page) used to look
+// up the title + next-step bullets + retry-button label from installErrorCopy.
+// `longMessage` is the per-request sentence describing what specifically went
+// wrong. `retryURL` is the button target — empty means render no button.
+func (h *InstallCallbackHandler) renderError(c *gin.Context, status int, code, longMessage, retryURL string) {
+	cp, ok := installErrorCopy[code]
+	if !ok {
+		cp = errorCopy{
+			title: "Install failed",
+			steps: []string{
+				"Restart the install from your agent.",
+				"If it keeps failing, capture the URL and the time and contact the hub operator.",
+			},
+			retryLabel: "Restart login",
+		}
+	}
+	h.renderInfoPage(c, status, code, cp.title, longMessage, cp.steps, retryURL, cp.retryLabel)
+}
+
+// renderSetupActionUpdate handles GitHub's setup_action=update redirect, which
+// fires when an existing installation is reconfigured (e.g. repo added/removed
+// from an installation's repository set). No new token is minted — the existing
+// token still works. The page tells the user where to manage tokens (Phase 4
+// of Auth v2 lands the /me/tokens route; until then the button 404s and we
+// point self-hosters at `hub mint-token`).
+func (h *InstallCallbackHandler) renderSetupActionUpdate(c *gin.Context) {
+	h.renderInfoPage(c, http.StatusOK, "setup_action_update",
+		"Installation updated",
+		"Your GitHub App installation was reconfigured. No new token was minted — your existing token still works.",
+		[]string{
+			"To rotate or revoke tokens, head to /me/tokens (this route lands in Phase 4 of Auth v2 — the button below will 404 until then).",
+			"Self-hosters can rotate now via: hub mint-token <installation_id> <org>.",
+			"To get a fresh token from scratch, run the login tool in your agent.",
+		},
+		h.baseURL+"/me/tokens", "Manage tokens")
+}
+
+// renderInfoPage writes install_error.html with the given content. The CSP
+// blocks scripts entirely (the error template has no inline JS, unlike the
+// happy-path token reveal page), and Cache-Control: no-store keeps any
+// transient query-string echo out of intermediate caches.
+func (h *InstallCallbackHandler) renderInfoPage(c *gin.Context, status int, code, title, longMessage string, steps []string, retryURL, retryLabel string) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("Content-Security-Policy",
+		"default-src 'self'; style-src 'unsafe-inline'; img-src 'none'")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Status(status)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+
+	data := struct {
+		HubURL      string
+		Code        string
+		Title       string
+		LongMessage string
+		Steps       []string
+		RetryURL    string
+		RetryLabel  string
+	}{
+		HubURL:      h.baseURL,
+		Code:        code,
+		Title:       title,
+		LongMessage: longMessage,
+		Steps:       steps,
+		RetryURL:    retryURL,
+		RetryLabel:  retryLabel,
+	}
+	if err := h.errorTmpl.Execute(c.Writer, data); err != nil {
+		// Headers are already written; best we can do is log.
+		log.Printf("install callback: render error page: %v", err)
 	}
 }
 
