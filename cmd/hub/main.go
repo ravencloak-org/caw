@@ -124,13 +124,30 @@ func main() {
 	// Setup URL after a user installs, mints a Watcher token on the spot, and
 	// renders it once. It is independent of the manifest flow: as long as
 	// BaseURL is set we register it; missing App credentials are reported by
-	// the handler at request time (since they are loaded from the store).
+	// the handler at request time.
+	//
+	// Credentials are resolved per request, env first then store, so a
+	// hand-registered App (CAW_APP_CLIENT_ID/SECRET in env) works alongside a
+	// manifest-registered App (creds in DB) without restart.
 	var ich *hub.InstallCallbackHandler
 	if cfg.BaseURL != "" {
+		credsFn := func() (string, string, bool, error) {
+			if cfg.AppClientID != "" && cfg.AppClientSecret != "" {
+				return cfg.AppClientID, cfg.AppClientSecret, true, nil
+			}
+			creds, ok, err := st.LoadAppCredentials()
+			if err != nil {
+				return "", "", false, err
+			}
+			if !ok || creds.ClientID == "" || creds.ClientSecret == "" {
+				return "", "", false, nil
+			}
+			return creds.ClientID, creds.ClientSecret, true, nil
+		}
 		ich, err = hub.NewInstallCallbackHandler(hub.InstallCallbackConfig{
 			BaseURL: cfg.BaseURL,
-			Store:   st,
 			MintFn:  mintFn,
+			CredsFn: credsFn,
 		})
 		if err != nil {
 			log.Fatalf("install callback handler: %v", err)

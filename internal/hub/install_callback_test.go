@@ -2,6 +2,7 @@ package hub
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -78,28 +79,39 @@ func (f *fakeGitHubAuth) handler() http.HandlerFunc {
 	}
 }
 
+// callbackTestOpts configures what the wired InstallCallbackHandler exposes to
+// each test. The fields it does not set fall back to handler defaults that mean
+// "happy path."
+type callbackTestOpts struct {
+	// clientID/clientSecret are returned by credsFn. Both empty → ok=false (the
+	// "no credentials configured" branch). credsErr overrides to err != nil.
+	clientID, clientSecret string
+	credsErr               error
+	// mintErr forces mintFn to fail.
+	mintErr error
+}
+
 // newInstallCallbackForTest wires an InstallCallbackHandler that points at a
-// stub GitHub auth server (both OAuth and REST). It also seeds App credentials
-// in the store so LoadAppCredentials succeeds unless the test overrides.
-func newInstallCallbackForTest(t *testing.T, fake *fakeGitHubAuth, mintErr error, seedCreds bool) (*gin.Engine, *store.Store, *httptest.Server) {
+// stub GitHub auth server. The credsFn returns opts.clientID/clientSecret/credsErr
+// so tests can exercise each branch.
+func newInstallCallbackForTest(t *testing.T, fake *fakeGitHubAuth, opts callbackTestOpts) (*gin.Engine, *store.Store) {
 	t.Helper()
 	st := newTestStore(t)
-	if seedCreds {
-		if err := st.SaveAppCredentials(store.AppCredentials{
-			AppID:        "12345",
-			ClientID:     "Iv1.fakeclient",
-			ClientSecret: "fakesecret",
-			PEM:          "fakepem",
-		}); err != nil {
-			t.Fatalf("seed credentials: %v", err)
-		}
-	}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
 
+	credsFn := func() (string, string, bool, error) {
+		if opts.credsErr != nil {
+			return "", "", false, opts.credsErr
+		}
+		if opts.clientID == "" && opts.clientSecret == "" {
+			return "", "", false, nil
+		}
+		return opts.clientID, opts.clientSecret, true, nil
+	}
 	mintFn := func(installationID, org string) (string, error) {
-		if mintErr != nil {
-			return "", mintErr
+		if opts.mintErr != nil {
+			return "", opts.mintErr
 		}
 		// Mirror buildMintFn in cmd/hub/main.go: persist the hash so the
 		// handler's downstream effect (token usable for /sse auth) is testable.
@@ -109,11 +121,12 @@ func newInstallCallbackForTest(t *testing.T, fake *fakeGitHubAuth, mintErr error
 		}
 		return raw, nil
 	}
+
 	h, err := NewInstallCallbackHandler(InstallCallbackConfig{
 		BaseURL:    "http://hub.example.com",
 		GithubBase: srv.URL, // both endpoints multiplexed by path on the stub
 		APIBase:    srv.URL,
-		Store:      st,
+		CredsFn:    credsFn,
 		MintFn:     mintFn,
 	})
 	if err != nil {
@@ -121,7 +134,13 @@ func newInstallCallbackForTest(t *testing.T, fake *fakeGitHubAuth, mintErr error
 	}
 	r := gin.New()
 	r.GET("/github/app/install/callback", h.Handle)
-	return r, st, srv
+	return r, st
+}
+
+// happyOpts returns config that satisfies every branch up to and including
+// the OAuth + ownership check, leaving the test free to override.
+func happyOpts() callbackTestOpts {
+	return callbackTestOpts{clientID: "Iv1.fakeclient", clientSecret: "fakesecret"}
 }
 
 func installReq(installID, setupAction, code string) *http.Request {
@@ -143,7 +162,7 @@ func installReq(installID, setupAction, code string) *http.Request {
 }
 
 func TestInstallCallback_MissingInstallationID(t *testing.T) {
-	r, _, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, nil, true)
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("", "install", "code123"))
 	if w.Code != http.StatusBadRequest {
@@ -155,7 +174,7 @@ func TestInstallCallback_MissingInstallationID(t *testing.T) {
 }
 
 func TestInstallCallback_WrongSetupAction(t *testing.T) {
-	r, _, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, nil, true)
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "update", "code"))
 	if w.Code != http.StatusBadRequest {
@@ -164,7 +183,7 @@ func TestInstallCallback_WrongSetupAction(t *testing.T) {
 }
 
 func TestInstallCallback_MissingOAuthCode(t *testing.T) {
-	r, _, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, nil, true)
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", ""))
 	if w.Code != http.StatusBadRequest {
@@ -175,8 +194,8 @@ func TestInstallCallback_MissingOAuthCode(t *testing.T) {
 	}
 }
 
-func TestInstallCallback_NoAppCredentials(t *testing.T) {
-	r, _, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, nil, false /*seedCreds*/)
+func TestInstallCallback_NoCreds(t *testing.T) {
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, callbackTestOpts{})
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
 	if w.Code != http.StatusFailedDependency {
@@ -184,9 +203,30 @@ func TestInstallCallback_NoAppCredentials(t *testing.T) {
 	}
 }
 
+func TestInstallCallback_PartialCreds(t *testing.T) {
+	// clientID present, clientSecret empty — credsFn says ok=true, handler still rejects.
+	opts := callbackTestOpts{clientID: "Iv1.fakeclient"}
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, opts)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("123", "install", "code"))
+	if w.Code != http.StatusFailedDependency {
+		t.Fatalf("status = %d, want 424", w.Code)
+	}
+}
+
+func TestInstallCallback_CredsLookupError(t *testing.T) {
+	opts := callbackTestOpts{credsErr: errors.New("db locked")}
+	r, _ := newInstallCallbackForTest(t, &fakeGitHubAuth{t: t}, opts)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("123", "install", "code"))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+}
+
 func TestInstallCallback_OAuthExchangeFails(t *testing.T) {
 	fake := &fakeGitHubAuth{t: t, oauthStatus: http.StatusUnauthorized, oauthBody: `{"error":"bad_verification_code"}`}
-	r, _, _ := newInstallCallbackForTest(t, fake, nil, true)
+	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "bad-code"))
 	if w.Code != http.StatusBadGateway {
@@ -196,7 +236,27 @@ func TestInstallCallback_OAuthExchangeFails(t *testing.T) {
 
 func TestInstallCallback_OAuthExchangeReturnsNoToken(t *testing.T) {
 	fake := &fakeGitHubAuth{t: t, oauthBody: `{"access_token":"","error":"expired"}`}
-	r, _, _ := newInstallCallbackForTest(t, fake, nil, true)
+	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("123", "install", "code"))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
+	}
+}
+
+func TestInstallCallback_OAuthMalformedJSON(t *testing.T) {
+	fake := &fakeGitHubAuth{t: t, oauthBody: `not json at all`}
+	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("123", "install", "code"))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
+	}
+}
+
+func TestInstallCallback_InstallationsAPIFails(t *testing.T) {
+	fake := &fakeGitHubAuth{t: t, installationsStatus: http.StatusServiceUnavailable}
+	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
 	if w.Code != http.StatusBadGateway {
@@ -207,7 +267,7 @@ func TestInstallCallback_OAuthExchangeReturnsNoToken(t *testing.T) {
 func TestInstallCallback_UserNotAdminOfInstallation(t *testing.T) {
 	// User is admin of installations 999, 1000 — but installation_id=123 is the request.
 	fake := &fakeGitHubAuth{t: t, installationsExtraIDs: []int64{999, 1000}}
-	r, _, _ := newInstallCallbackForTest(t, fake, nil, true)
+	r, _ := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
 	if w.Code != http.StatusForbidden {
@@ -221,7 +281,7 @@ func TestInstallCallback_HappyPath(t *testing.T) {
 		installationsAccountID:  123,
 		installationsAccountLog: "ravencloak-org",
 	}
-	r, st, _ := newInstallCallbackForTest(t, fake, nil, true)
+	r, st := newInstallCallbackForTest(t, fake, happyOpts())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "good-code"))
 
@@ -272,10 +332,94 @@ func TestInstallCallback_MintFails(t *testing.T) {
 		installationsAccountID:  123,
 		installationsAccountLog: "ravencloak-org",
 	}
-	r, _, _ := newInstallCallbackForTest(t, fake, fmt.Errorf("disk full"), true)
+	opts := happyOpts()
+	opts.mintErr = fmt.Errorf("disk full")
+	r, _ := newInstallCallbackForTest(t, fake, opts)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, installReq("123", "install", "code"))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
+	}
+}
+
+func TestNewInstallCallbackHandler_EmptyBaseURL(t *testing.T) {
+	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		CredsFn: func() (string, string, bool, error) { return "id", "sec", true, nil },
+		MintFn:  func(string, string) (string, error) { return "tok", nil },
+	})
+	if err == nil {
+		t.Fatal("want error for empty BaseURL")
+	}
+	if !strings.Contains(err.Error(), "BaseURL") {
+		t.Errorf("error = %v, want mention of BaseURL", err)
+	}
+}
+
+func TestNewInstallCallbackHandler_NilCredsFn(t *testing.T) {
+	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		BaseURL: "http://h.example",
+		MintFn:  func(string, string) (string, error) { return "tok", nil },
+	})
+	if err == nil {
+		t.Fatal("want error for nil CredsFn")
+	}
+	if !strings.Contains(err.Error(), "CredsFn") {
+		t.Errorf("error = %v, want mention of CredsFn", err)
+	}
+}
+
+func TestNewInstallCallbackHandler_NilMintFn(t *testing.T) {
+	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		BaseURL: "http://h.example",
+		CredsFn: func() (string, string, bool, error) { return "id", "sec", true, nil },
+	})
+	if err == nil {
+		t.Fatal("want error for nil MintFn")
+	}
+	if !strings.Contains(err.Error(), "MintFn") {
+		t.Errorf("error = %v, want mention of MintFn", err)
+	}
+}
+
+// fakeGitHubAuthMalformed is a separate stub because fakeGitHubAuth
+// always JSON-encodes its installations body; we need to inject raw
+// garbage for the installations decode-error branch.
+func TestInstallCallback_InstallationsMalformedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login/oauth/access_token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"t"}`))
+		case "/user/installations":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`not json at all`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	st := newTestStore(t)
+	credsFn := func() (string, string, bool, error) { return "id", "sec", true, nil }
+	mintFn := func(installationID, org string) (string, error) {
+		return "raw-watcher-token-XYZ", st.InsertToken(auth.HashToken("raw-watcher-token-XYZ"), installationID, org)
+	}
+	h, err := NewInstallCallbackHandler(InstallCallbackConfig{
+		BaseURL:    "http://hub.example.com",
+		GithubBase: srv.URL,
+		APIBase:    srv.URL,
+		CredsFn:    credsFn,
+		MintFn:     mintFn,
+	})
+	if err != nil {
+		t.Fatalf("NewInstallCallbackHandler: %v", err)
+	}
+	r := gin.New()
+	r.GET("/github/app/install/callback", h.Handle)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("123", "install", "code"))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
 	}
 }
