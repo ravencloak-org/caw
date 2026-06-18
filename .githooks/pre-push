@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# .githooks/pre-push — run the same gates CI runs, locally, BEFORE the push lands.
+#
+# Mirrors what these CI jobs do (see .github/workflows/{ci,sql}.yml):
+#   - Lint                → golangci-lint run
+#   - Vet                 → go vet ./...
+#   - SQLFluff (if .sql or translate-schema.py changed in this push)
+#   - Schema drift gate   (if db/ or generated SQL changed in this push)
+#
+# Build / unit / integration tests are NOT run here — too slow for a pre-push hook
+# and they don't fail on style. Run them locally with `go test -race ./...` before
+# the push if your change has runtime risk.
+#
+# Skip the whole hook with: git push --no-verify
+#
+# Install:  make hooks   (one-time, configures core.hooksPath = .githooks)
+
+set -e
+
+# Honor explicit opt-out.
+if [ "${CAW_SKIP_HOOKS:-0}" = "1" ]; then
+    echo "pre-push: CAW_SKIP_HOOKS=1, skipping"
+    exit 0
+fi
+
+# Only fire inside the caw repo (defensive: a stray core.hooksPath on another
+# checkout shouldn't blow up someone else's push).
+if [ ! -f go.mod ] || ! grep -q "github.com/ravencloak-org/caw" go.mod 2>/dev/null; then
+    exit 0
+fi
+
+red()    { printf "\033[31m%s\033[0m\n" "$*"; }
+green()  { printf "\033[32m%s\033[0m\n" "$*"; }
+yellow() { printf "\033[33m%s\033[0m\n" "$*"; }
+gate()   { printf "\033[36m── pre-push: %s\033[0m\n" "$*"; }
+
+fail() {
+    red "✗ $1"
+    [ -n "${2:-}" ] && printf "  %s\n" "$2"
+    exit 1
+}
+
+# Pre-push hook gets pushed refs on stdin as:
+#   <local-ref> <local-sha> <remote-ref> <remote-sha>
+# We use that to find the diff scope (so SQL / schema gates only fire when
+# relevant files actually changed). On first push to a branch, remote-sha is
+# 40 zeros — fall back to the working tree.
+ZERO="0000000000000000000000000000000000000000"
+CHANGED=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ -z "$local_sha" ] && continue
+    if [ "$remote_sha" = "$ZERO" ] || [ -z "$remote_sha" ]; then
+        # New branch — diff against origin/main (the merge target).
+        base=$(git merge-base "$local_sha" origin/main 2>/dev/null || echo "$local_sha")
+    else
+        base="$remote_sha"
+    fi
+    CHANGED+=$'\n'$(git diff --name-only "$base" "$local_sha" 2>/dev/null || true)
+done
+
+# If the loop ran (real push), use the captured diff; if stdin was empty
+# (e.g. `bash .githooks/pre-push` smoke-test), fall back to working-tree changes.
+if [ -z "${CHANGED//[[:space:]]/}" ]; then
+    CHANGED=$(git diff --name-only HEAD 2>/dev/null; git diff --name-only --cached 2>/dev/null)
+fi
+
+# ─── golangci-lint ───────────────────────────────────────────────────────────
+gate "golangci-lint (gofmt + misspell + staticcheck + revive + …)"
+if ! command -v golangci-lint >/dev/null 2>&1; then
+    fail "golangci-lint not installed" "install: brew install golangci-lint (macOS) — or see https://golangci-lint.run/welcome/install/"
+fi
+if ! golangci-lint run; then
+    fail "golangci-lint failed" "fix the issues above, or 'git push --no-verify' to bypass"
+fi
+
+# ─── go vet (covered by golangci-lint's govet but kept for parity with CI) ──
+gate "go vet"
+if ! go vet ./...; then
+    fail "go vet failed"
+fi
+
+# ─── SQLFluff (only when SQL or its generator changed) ──────────────────────
+if echo "$CHANGED" | grep -qE '\.sql$|scripts/(gen-schema\.sh|translate-schema\.py)'; then
+    gate "sqlfluff (SQL changes detected)"
+    if ! command -v sqlfluff >/dev/null 2>&1; then
+        yellow "⚠ sqlfluff not installed — skipping SQL lint"
+        yellow "  install: pip install 'sqlfluff==4.2.2'"
+    elif ! sqlfluff lint .; then
+        fail "sqlfluff failed" "fix the issues above, or 'git push --no-verify' to bypass"
+    fi
+fi
+
+# ─── Schema drift (only when Dolt source or generated SQL changed) ──────────
+if echo "$CHANGED" | grep -qE '^db/|internal/store/(schema|postgres/schema)\.sql|scripts/(gen-schema\.sh|translate-schema\.py)'; then
+    gate "schema drift gate (schema source changed)"
+    if ! command -v dolt >/dev/null 2>&1; then
+        yellow "⚠ dolt not installed — skipping schema drift gate"
+        yellow "  CI WILL still run this check; install dolt to catch it locally"
+        yellow "  install: brew install dolt (macOS) — pin to 2.1.4 per .github/workflows/sql.yml"
+    elif [ ! -x scripts/gen-schema.sh ]; then
+        yellow "⚠ scripts/gen-schema.sh not executable — skipping schema drift gate"
+    else
+        # Stash any uncommitted schema changes so the regen doesn't conflict, then
+        # restore them. We're not committing anything from inside the hook.
+        bash scripts/gen-schema.sh >/dev/null
+        if ! git diff --exit-code internal/store/schema.sql internal/store/postgres/schema.sql; then
+            fail "schema drift: regenerated files differ from committed" \
+                 "run 'make schema' and commit the regenerated files"
+        fi
+    fi
+fi
+
+green "✓ pre-push gates passed"

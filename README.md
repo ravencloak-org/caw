@@ -129,6 +129,11 @@ All slices below are merged.
 8. **Observability** — OpenTelemetry Go SDK → OTLP, bundled OpenObserve sink ([ADR-0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)).
 9. **Schema source-of-truth** — Dolt versions the schema and generates the SQLite + Postgres DDL ([ADR-0009](./docs/adr/0009-dolt-versioned-schema-source-of-truth.md)).
 
+
+## Contributing
+
+One-time: `make hooks` — sets `core.hooksPath = .githooks` so every push runs the same gates CI runs (`golangci-lint`, `go vet`, `sqlfluff` when `.sql` changed, schema drift when `db/` changed). Skip a single push with `git push --no-verify` or the whole hook with `CAW_SKIP_HOOKS=1 git push`.
+
 ## Roadmap / parked
 
 - **SaaS** hosted offering + pricing.
