@@ -36,7 +36,7 @@ import (
 )
 
 // version is the MCP server's advertised implementation version.
-const version = "0.1.0"
+var version = "dev"
 
 // subscribePollWindow bounds how long subscribe_pr holds the SSE stream during
 // a single tool call before returning whatever summaries arrived. An MCP tool
@@ -45,6 +45,13 @@ const version = "0.1.0"
 const subscribePollWindow = 25 * time.Second
 
 func main() {
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-version" {
+			fmt.Printf("caw-watcher %s\n", version)
+			return
+		}
+	}
+
 	// Logs must not pollute stdout (the MCP transport); send them to stderr.
 	log.SetOutput(os.Stderr)
 	log.SetPrefix("watcher: ")

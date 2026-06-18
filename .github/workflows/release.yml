@@ -78,14 +78,83 @@ jobs:
           # whether the deploy was actually queued.
           test "$status" -ge 200 && test "$status" -lt 300
 
+  build-watcher:
+    name: Build Watcher binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: darwin,  goarch: arm64, ext: ""     }
+          - { goos: darwin,  goarch: amd64, ext: ""     }
+          - { goos: linux,   goarch: arm64, ext: ""     }
+          - { goos: linux,   goarch: amd64, ext: ""     }
+          - { goos: windows, goarch: amd64, ext: ".exe" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Build caw-watcher
+        # CGO disabled keeps the binary statically linked and portable across
+        # libc variants. -s -w strips the symbol table and DWARF for size.
+        # -X main.version=${GITHUB_REF_NAME} bakes the release tag in so
+        # `caw-watcher --version` reports the tag, not "dev".
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o caw-watcher-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} \
+            ./cmd/watcher
+
+      - name: Archive (tar.gz)
+        if: matrix.goos != 'windows'
+        run: |
+          tar -czf caw-watcher-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
+            caw-watcher-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+
+      - name: Archive (zip)
+        if: matrix.goos == 'windows'
+        run: |
+          zip caw-watcher-${{ matrix.goos }}-${{ matrix.goarch }}.zip \
+            caw-watcher-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # One artifact per matrix row; name includes os+arch so they don't collide.
+          # download-artifact in github-release uses pattern + merge-multiple to gather.
+          name: caw-watcher-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: caw-watcher-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          if-no-files-found: error
+          retention-days: 7
+
   github-release:
     name: GitHub Release
-    needs: build-push
+    needs: [build-push, build-watcher]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # gh needs full history to diff against the previous tag
+
+      - name: Download watcher archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: caw-watcher-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum caw-watcher-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Create release with auto-generated notes
         # --generate-notes pulls PR titles/labels since the previous tag and
@@ -94,3 +163,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+
+      - name: Upload watcher archives + checksums to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: dist
+        # --clobber overwrites assets if a re-run re-uploads them.
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            caw-watcher-*.tar.gz \
+            caw-watcher-*.zip \
+            SHA256SUMS.txt \
+            --clobber
