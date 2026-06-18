@@ -89,7 +89,7 @@ Then:
 
 1. **Create the GitHub App** — hit `GET /github/app/manifest` with the bootstrap token in the `Authorization: Bearer` header to run the App Manifest flow; the callback mints and stores the App credentials (App ID, private key, OAuth client) in the Hub's DB.
 2. **Install the App** on the repos you want watched.
-3. **Mint a Watcher token** — `hub mint-token <installation_id> [org]` (the raw token is never echoed by the manifest callback).
+3. **Get a Watcher token** — when a user installs the App, GitHub redirects them back to `${CAW_BASE_URL}/github/app/install/callback`, which renders the token once for copy-paste into a harness ([ADR-0010](./docs/adr/0010-self-service-watcher-tokens.md)). Operators may still mint tokens server-side via `hub mint-token <installation_id> [org]` for automation or recovery.
 4. **Point a Watcher** (the MCP server in your harness) at the Hub URL with that token and `subscribe_pr(owner, repo, number)`.
   - See [`docs/install/`](./docs/install/) for harness-specific configs (Claude Desktop, Cursor, Codex CLI).
 
@@ -127,7 +127,7 @@ All slices below are merged.
 - **Channels:** an optional Claude push lane, once it reaches general release — the portable contract stays MCP either way.
 - Tuning knobs in flight: grace-window duration and rebase-lease TTL/heartbeat.
 
-_Decisions are recorded as ADRs: portable Go+SQLite Hub ([0001](./docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md)), agent-owned rebase ([0002](./docs/adr/0002-agent-owned-rebase.md)), SSE auth ([0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)), re-settle ([0004](./docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md)), Hub-granted lease ([0005](./docs/adr/0005-hub-granted-rebase-lease.md)), pending model ([0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md)), fan-out ([0007](./docs/adr/0007-subscriptions-fan-out.md)), observability ([0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)), Dolt schema ([0009](./docs/adr/0009-dolt-versioned-schema-source-of-truth.md))._
+_Decisions are recorded as ADRs: portable Go+SQLite Hub ([0001](./docs/adr/0001-portable-go-sqlite-hub-over-cloudflare.md)), agent-owned rebase ([0002](./docs/adr/0002-agent-owned-rebase.md)), SSE auth ([0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)), re-settle ([0004](./docs/adr/0004-rounds-re-settle-on-late-same-sha-signals.md)), Hub-granted lease ([0005](./docs/adr/0005-hub-granted-rebase-lease.md)), pending model ([0006](./docs/adr/0006-pending-is-latest-state-per-type-consumer-owns-relevance.md)), fan-out ([0007](./docs/adr/0007-subscriptions-fan-out.md)), observability ([0008](./docs/adr/0008-observability-via-otel-and-bundled-openobserve.md)), Dolt schema ([0009](./docs/adr/0009-dolt-versioned-schema-source-of-truth.md)), self-service tokens ([0010](./docs/adr/0010-self-service-watcher-tokens.md))._
 
 ## Status
 
