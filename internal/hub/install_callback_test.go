@@ -89,6 +89,19 @@ type callbackTestOpts struct {
 	credsErr               error
 	// mintErr forces mintFn to fail.
 	mintErr error
+	// captured records the args mintFn was invoked with so tests can assert
+	// the widened Phase 1 signature.
+	captured *mintCall
+}
+
+// mintCall is the recorded mintFn invocation: install_callback Phase 1
+// passes deviceLabel="legacy", userID=0, userLogin="" (legacy semantics).
+type mintCall struct {
+	installationID string
+	org            string
+	deviceLabel    string
+	userID         int64
+	userLogin      string
 }
 
 // newInstallCallbackForTest wires an InstallCallbackHandler that points at a
@@ -109,17 +122,26 @@ func newInstallCallbackForTest(t *testing.T, fake *fakeGitHubAuth, opts callback
 		}
 		return opts.clientID, opts.clientSecret, true, nil
 	}
-	mintFn := func(installationID, org string) (string, error) {
+	mintFn := func(installationID, org, deviceLabel string, userID int64, userLogin string) (string, string, error) {
+		if opts.captured != nil {
+			*opts.captured = mintCall{installationID, org, deviceLabel, userID, userLogin}
+		}
 		if opts.mintErr != nil {
-			return "", opts.mintErr
+			return "", "", opts.mintErr
 		}
 		// Mirror buildMintFn in cmd/hub/main.go: persist the hash so the
 		// handler's downstream effect (token usable for /sse auth) is testable.
 		const raw = "raw-watcher-token-XYZ"
-		if err := st.InsertToken(auth.HashToken(raw), installationID, org); err != nil {
-			return "", err
+		if err := st.InsertTokenRow(store.Token{
+			ID:             "01HXFAKETOKENIDABCDEFGHJKM",
+			Hash:           auth.HashToken(raw),
+			InstallationID: installationID,
+			Org:            org,
+			DeviceLabel:    deviceLabel,
+		}); err != nil {
+			return "", "", err
 		}
-		return raw, nil
+		return raw, "01HXFAKETOKENIDABCDEFGHJKM", nil
 	}
 
 	h, err := NewInstallCallbackHandler(InstallCallbackConfig{
@@ -325,16 +347,62 @@ func TestInstallCallback_HappyPath(t *testing.T) {
 	if xcto := w.Header().Get("X-Content-Type-Options"); xcto != "nosniff" {
 		t.Errorf("X-Content-Type-Options = %q, want nosniff", xcto)
 	}
-	// Token was persisted (by hash) — VerifyToken finds it.
-	installID, ok, err := st.VerifyToken(auth.HashToken("raw-watcher-token-XYZ"))
+	// Token was persisted (by hash) — VerifyToken finds it; Phase 1 keeps
+	// install-callback mint calls on legacy semantics (GitHubUserID == nil,
+	// DeviceLabel == "legacy") via the widened MintFunc.
+	tok, ok, err := st.VerifyToken(auth.HashToken("raw-watcher-token-XYZ"))
 	if err != nil {
 		t.Fatalf("verify token: %v", err)
 	}
 	if !ok {
 		t.Fatalf("minted token not present in store")
 	}
-	if installID != "123" {
-		t.Errorf("token installation = %q, want 123", installID)
+	if tok.InstallationID != "123" {
+		t.Errorf("token installation = %q, want 123", tok.InstallationID)
+	}
+	if tok.GitHubUserID != nil {
+		t.Errorf("install-callback Phase 1 GitHubUserID = %v, want nil (legacy)", *tok.GitHubUserID)
+	}
+	if tok.DeviceLabel != "legacy" {
+		t.Errorf("install-callback Phase 1 DeviceLabel = %q, want \"legacy\"", tok.DeviceLabel)
+	}
+}
+
+// TestInstallCallback_HappyPath_MintFnReceivesWidenedArgs verifies the
+// install-callback widens its MintFunc call per Phase 1: deviceLabel="legacy",
+// userID=0, userLogin="". Phase 3's /auth/picker handler is the path that
+// will start passing real user values; the install callback intentionally
+// stays on legacy semantics until Phase 5 sunsets it.
+func TestInstallCallback_HappyPath_MintFnReceivesWidenedArgs(t *testing.T) {
+	fake := &fakeGitHubAuth{
+		t:                       t,
+		installationsAccountID:  321,
+		installationsAccountLog: "ravencloak-org",
+	}
+	var captured mintCall
+	opts := happyOpts()
+	opts.captured = &captured
+	r, _ := newInstallCallbackForTest(t, fake, opts)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, installReq("321", "install", "good-code"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", w.Code, w.Body.String())
+	}
+	if captured.installationID != "321" {
+		t.Errorf("mintFn installationID = %q, want 321", captured.installationID)
+	}
+	if captured.org != "ravencloak-org" {
+		t.Errorf("mintFn org = %q, want ravencloak-org", captured.org)
+	}
+	if captured.deviceLabel != "legacy" {
+		t.Errorf("mintFn deviceLabel = %q, want \"legacy\"", captured.deviceLabel)
+	}
+	if captured.userID != 0 {
+		t.Errorf("mintFn userID = %d, want 0 (legacy)", captured.userID)
+	}
+	if captured.userLogin != "" {
+		t.Errorf("mintFn userLogin = %q, want \"\"", captured.userLogin)
 	}
 }
 
@@ -455,7 +523,7 @@ func TestInstallCallback_ErrorPageRendersForFailedOAuth(t *testing.T) {
 func TestNewInstallCallbackHandler_EmptyBaseURL(t *testing.T) {
 	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
 		CredsFn: func() (string, string, bool, error) { return "id", "sec", true, nil },
-		MintFn:  func(string, string) (string, error) { return "tok", nil },
+		MintFn:  MintFunc(func(string, string, string, int64, string) (string, string, error) { return "tok", "id", nil }),
 	})
 	if err == nil {
 		t.Fatal("want error for empty BaseURL")
@@ -468,7 +536,7 @@ func TestNewInstallCallbackHandler_EmptyBaseURL(t *testing.T) {
 func TestNewInstallCallbackHandler_NilCredsFn(t *testing.T) {
 	_, err := NewInstallCallbackHandler(InstallCallbackConfig{
 		BaseURL: "http://h.example",
-		MintFn:  func(string, string) (string, error) { return "tok", nil },
+		MintFn:  MintFunc(func(string, string, string, int64, string) (string, string, error) { return "tok", "id", nil }),
 	})
 	if err == nil {
 		t.Fatal("want error for nil CredsFn")
@@ -512,8 +580,15 @@ func TestInstallCallback_InstallationsMalformedJSON(t *testing.T) {
 
 	st := newTestStore(t)
 	credsFn := func() (string, string, bool, error) { return "id", "sec", true, nil }
-	mintFn := func(installationID, org string) (string, error) {
-		return "raw-watcher-token-XYZ", st.InsertToken(auth.HashToken("raw-watcher-token-XYZ"), installationID, org)
+	mintFn := func(installationID, org, deviceLabel string, _ int64, _ string) (string, string, error) {
+		const raw = "raw-watcher-token-XYZ"
+		return raw, "01HXFAKETOKENIDABCDEFGHJKM", st.InsertTokenRow(store.Token{
+			ID:             "01HXFAKETOKENIDABCDEFGHJKM",
+			Hash:           auth.HashToken(raw),
+			InstallationID: installationID,
+			Org:            org,
+			DeviceLabel:    deviceLabel,
+		})
 	}
 	h, err := NewInstallCallbackHandler(InstallCallbackConfig{
 		BaseURL:    "http://hub.example.com",

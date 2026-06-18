@@ -265,7 +265,7 @@ func TestE2E_LeaseLifecycle_OverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("token2: %v", err)
 	}
-	if err := st.InsertToken(hash2, "inst2", "org2"); err != nil {
+	if err := st.InsertTokenRow(store.Token{Hash: hash2, InstallationID: "inst2", Org: "org2"}); err != nil {
 		t.Fatalf("insert token2: %v", err)
 	}
 	if err := st.UpsertInstallation("inst2", "org2"); err != nil {

@@ -55,11 +55,21 @@ CREATE TABLE IF NOT EXISTS signals (
 -- Hub-minted installation tokens for SSE / get_pending auth (ADR-0003).
 -- Only the hash is stored; the raw token is shown once at mint time.
 CREATE TABLE IF NOT EXISTS tokens (
-    token_hash      VARCHAR(64)  NOT NULL,        -- hex sha256 of the raw token
-    installation_id VARCHAR(255) NOT NULL,
-    org             VARCHAR(255) NOT NULL DEFAULT '',
-    created_at      BIGINT       NOT NULL,
-    PRIMARY KEY (token_hash)
+    token_hash        VARCHAR(64)  NOT NULL,        -- hex sha256 of the raw token
+    installation_id   VARCHAR(255) NOT NULL,
+    org               VARCHAR(255) NOT NULL DEFAULT '',
+    created_at        BIGINT       NOT NULL,
+    id                CHAR(26)     NOT NULL DEFAULT '',   -- ULID; backfill in code path (legacy rows → 'legacy-<rowid>')
+    github_user_id    BIGINT       NULL,                  -- nullable until v0.4.0
+    github_user_login VARCHAR(255) NULL,
+    device_label      VARCHAR(64)  NOT NULL DEFAULT 'legacy',
+    expires_at        BIGINT       NULL,                  -- NULL = no expiry (legacy)
+    last_used_at      BIGINT       NULL,
+    revoked_at        BIGINT       NULL,
+    PRIMARY KEY (token_hash),
+    KEY tokens_user           (github_user_id),
+    KEY tokens_installation   (installation_id),
+    KEY tokens_expires_active (revoked_at, expires_at)
 );
 
 -- GitHub App installations. One row per installation_id.
@@ -67,6 +77,7 @@ CREATE TABLE IF NOT EXISTS installations (
     installation_id VARCHAR(255) NOT NULL,
     account_login   VARCHAR(255) NOT NULL,
     created_at      BIGINT       NOT NULL,
+    app_slug        VARCHAR(255) NOT NULL DEFAULT '',   -- GitHub App slug (e.g. "caw-ravencloak"); for /apps/<slug>/installations/new
     PRIMARY KEY (installation_id)
 );
 
@@ -104,4 +115,30 @@ CREATE TABLE IF NOT EXISTS app_credentials (
     pem            TEXT         NOT NULL,
     created_at     BIGINT       NOT NULL,
     PRIMARY KEY (id)
+);
+
+-- OAuth login sessions for MCP-initiated `login` handoffs (Auth v2, Phase 3+).
+-- Short-lived (10 min); a purger sweeps expired rows. Holds PKCE challenge,
+-- mode-specific fields (loopback_redirect for loopback, device/user_code for
+-- device), and the pending TokenBundle awaiting device-flow pickup.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id                    CHAR(26)     NOT NULL,           -- ULID
+    handshake_mode                  VARCHAR(16)  NOT NULL,           -- "loopback" | "device"
+    code_challenge        VARCHAR(64)  NOT NULL,           -- S256 hash, base64url
+    code_challenge_method VARCHAR(8)   NOT NULL,           -- "S256"
+    loopback_redirect     VARCHAR(255) NULL,
+    device_code           VARCHAR(64)  NULL,
+    user_code             VARCHAR(16)  NULL,
+    client_label          VARCHAR(64)  NOT NULL,
+    github_user_id        BIGINT       NULL,               -- set after OAuth callback
+    github_user_login     VARCHAR(255) NULL,
+    pending_bundle_json   TEXT         NULL,               -- TokenBundle awaiting pickup (device flow)
+    -- state: pending|awaiting_install|awaiting_picker|delivered|canceled|expired
+    state                 VARCHAR(16)  NOT NULL DEFAULT 'pending',
+    created_at            BIGINT       NOT NULL,
+    expires_at            BIGINT       NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_auth_sessions_device     (device_code),
+    UNIQUE KEY uq_auth_sessions_user_code  (user_code),
+    KEY        auth_sessions_expires       (expires_at)
 );

@@ -52,7 +52,7 @@ func newTestServerOpts(t *testing.T, grace time.Duration, optsFn func(*store.Sto
 	if err != nil {
 		t.Fatalf("token: %v", err)
 	}
-	if err := st.InsertToken(hash, "inst1", "org1"); err != nil {
+	if err := st.InsertTokenRow(store.Token{Hash: hash, InstallationID: "inst1", Org: "org1"}); err != nil {
 		t.Fatalf("insert token: %v", err)
 	}
 	// Register inst1's installation and associate the repo used by the

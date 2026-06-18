@@ -86,13 +86,14 @@ func TestHandleInstallation_Created_CallsMintFn(t *testing.T) {
 	h := New(st, nil, nil)
 
 	called := false
-	var gotID, gotOrg string
-	h.WithMintFunc(func(installationID, org string) (string, error) {
+	var gotID, gotOrg, gotLabel string
+	h.WithMintFunc(MintFunc(func(installationID, org, deviceLabel string, _ int64, _ string) (string, string, error) {
 		called = true
 		gotID = installationID
 		gotOrg = org
-		return "raw-token", nil
-	})
+		gotLabel = deviceLabel
+		return "raw-token", "01HXWEBHOOKMINT0000000000", nil
+	}))
 
 	env := installEnvelope("created", 99, "org99", nil)
 	if err := h.handleInstallation(env); err != nil {
@@ -108,15 +109,18 @@ func TestHandleInstallation_Created_CallsMintFn(t *testing.T) {
 	if gotOrg != "org99" {
 		t.Errorf("mintFn org = %q, want %q", gotOrg, "org99")
 	}
+	if gotLabel != "installation-auto" {
+		t.Errorf("mintFn deviceLabel = %q, want \"installation-auto\" (Phase 1 webhook auto-mint)", gotLabel)
+	}
 }
 
 // TestHandleInstallation_Created_MintFnError checks that a mintFn error is non-fatal.
 func TestHandleInstallation_Created_MintFnError(t *testing.T) {
 	st := openTestStore(t)
 	h := New(st, nil, nil)
-	h.WithMintFunc(func(_, _ string) (string, error) {
-		return "", fmt.Errorf("mint failed")
-	})
+	h.WithMintFunc(MintFunc(func(_, _, _ string, _ int64, _ string) (string, string, error) {
+		return "", "", fmt.Errorf("mint failed")
+	}))
 
 	env := installEnvelope("created", 7, "org7", nil)
 	// Must not return an error even though mintFn fails.

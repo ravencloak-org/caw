@@ -39,7 +39,7 @@ func newTestStore(t *testing.T) *store.Store {
 // manifestTestOpts configures the handler built by newManifestHandlerForTest.
 type manifestTestOpts struct {
 	githubBase       string
-	mintFn           func(string, string) (string, error)
+	mintFn           MintFunc
 	allowRebootstrap bool
 }
 
@@ -369,13 +369,19 @@ func TestHandleCallback_Success(t *testing.T) {
 	fakeGH := fakeGitHubSuccess(t, 1001)
 
 	mintCalled := false
-	mintFn := func(installationID, _ string) (string, error) {
+	mintFn := MintFunc(func(installationID, _, deviceLabel string, userID int64, _ string) (string, string, error) {
 		mintCalled = true
 		if installationID != "setup" {
 			t.Errorf("mintFn installationID = %q, want setup", installationID)
 		}
-		return "raw-setup-token", nil
-	}
+		if deviceLabel != "manifest-setup" {
+			t.Errorf("mintFn deviceLabel = %q, want manifest-setup", deviceLabel)
+		}
+		if userID != 0 {
+			t.Errorf("mintFn userID = %d, want 0 (legacy)", userID)
+		}
+		return "raw-setup-token", "01HXMANIFESTSETUP000000000", nil
+	})
 
 	r, _, st := newManifestHandlerForTest(t, manifestTestOpts{githubBase: fakeGH.URL, mintFn: mintFn})
 

@@ -43,11 +43,11 @@ type ManifestHandler struct {
 	baseURL          string // publicly reachable URL of this Hub (CAW_BASE_URL)
 	githubBase       string // GitHub web base, defaults to https://github.com
 	st               *store.Store
-	mintFn           func(installationID, org string) (string, error) // may be nil
-	manifestJSON     []byte                                           // pre-encoded manifest (sans state)
-	bootstrapToken   string                                           // operator bootstrap secret (required)
-	allowRebootstrap bool                                             // permit overwriting existing credentials
-	secureCookie     bool                                             // emit Secure cookie attribute (false in plain-HTTP tests)
+	mintFn           MintFunc // may be nil
+	manifestJSON     []byte   // pre-encoded manifest (sans state)
+	bootstrapToken   string   // operator bootstrap secret (required)
+	allowRebootstrap bool     // permit overwriting existing credentials
+	secureCookie     bool     // emit Secure cookie attribute (false in plain-HTTP tests)
 }
 
 // ManifestConfig is the configuration for a ManifestHandler.
@@ -55,7 +55,7 @@ type ManifestConfig struct {
 	BaseURL    string
 	GithubBase string // defaults to "https://github.com"
 	Store      *store.Store
-	MintFn     func(installationID, org string) (string, error)
+	MintFn     MintFunc
 	// BootstrapToken is the operator secret that gates both manifest routes.
 	// Required: without it the handler cannot be constructed.
 	BootstrapToken string
@@ -297,7 +297,7 @@ func (m *ManifestHandler) HandleCallback(c *gin.Context) {
 	// is NEVER returned here (it would leak through the unauthenticated GitHub
 	// redirect chain). The operator retrieves it via `hub mint-token`.
 	if m.mintFn != nil {
-		if _, err := m.mintFn("setup", ""); err != nil {
+		if _, _, err := m.mintFn("setup", "", "manifest-setup", 0, ""); err != nil {
 			log.Printf("manifest callback mint: %v", err) // non-fatal
 		}
 	}

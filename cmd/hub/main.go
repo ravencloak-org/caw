@@ -184,18 +184,39 @@ func main() {
 }
 
 // buildMintFn returns the function used to mint Hub installation tokens.
-// It calls auth.GenerateToken, stores the hash, and returns the raw token.
-// The raw token is never logged (security: keep secrets out of logs).
-func buildMintFn(st *store.Store) func(installationID, org string) (string, error) {
-	return func(installationID, org string) (string, error) {
+// It calls auth.GenerateToken + auth.GenerateID, persists the row (hash + id
+// + lifecycle metadata), and returns the raw token (shown once) and the
+// persisted token id (for revoke / list / audit).
+//
+// Phase 1 callers still pass userID=0 (legacy semantics): install-callback
+// flows through "legacy", webhook auto-mint through "installation-auto",
+// manifest setup through "manifest-setup". Phase 3+'s /auth/picker handler
+// will start passing real github_user_id values.
+func buildMintFn(st *store.Store) hub.MintFunc {
+	return func(installationID, org, deviceLabel string, userID int64, userLogin string) (string, string, error) {
 		raw, hash, err := auth.GenerateToken()
 		if err != nil {
-			return "", fmt.Errorf("buildMintFn GenerateToken: %w", err)
+			return "", "", fmt.Errorf("buildMintFn GenerateToken: %w", err)
 		}
-		if err := st.InsertToken(hash, installationID, org); err != nil {
-			return "", fmt.Errorf("buildMintFn InsertToken: %w", err)
+		id, err := auth.GenerateID()
+		if err != nil {
+			return "", "", fmt.Errorf("buildMintFn GenerateID: %w", err)
 		}
-		return raw, nil
+		t := store.Token{
+			ID:              id,
+			Hash:            hash,
+			InstallationID:  installationID,
+			Org:             org,
+			GitHubUserLogin: userLogin,
+			DeviceLabel:     deviceLabel,
+		}
+		if userID > 0 {
+			t.GitHubUserID = &userID
+		}
+		if err := st.InsertTokenRow(t); err != nil {
+			return "", "", fmt.Errorf("buildMintFn InsertTokenRow: %w", err)
+		}
+		return raw, id, nil
 	}
 }
 
@@ -293,11 +314,8 @@ func mintToken(st *store.Store, args []string) error {
 	if len(args) > 1 {
 		org = args[1]
 	}
-	raw, hash, err := auth.GenerateToken()
+	raw, _, err := buildMintFn(st)(args[0], org, "cli-mint-token", 0, "")
 	if err != nil {
-		return err
-	}
-	if err := st.InsertToken(hash, args[0], org); err != nil {
 		return err
 	}
 	fmt.Println(raw)
