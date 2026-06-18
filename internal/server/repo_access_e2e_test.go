@@ -317,7 +317,7 @@ func TestE2E_WebhookInstallationRepositoriesRemovedFlushesCache(t *testing.T) {
 		t.Fatalf("post-webhook cache.Len() = %d, want 0 (cache must be flushed by webhook)", h.cache.Len())
 	}
 
-	// As a defence-in-depth sanity check, the next SSE request must NOT
+	// As a defense-in-depth sanity check, the next SSE request must NOT
 	// silently 200 from a stale cached allow. RequireRepoScope now also
 	// rejects (repo no longer in installation), so the user-visible code
 	// is 403 — either way, a stale 200 would mean the flush silently

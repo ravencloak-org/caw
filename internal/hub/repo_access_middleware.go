@@ -19,12 +19,12 @@ import (
 // soon-to-die path" nudge.
 const (
 	// DeprecationLegacyToken signals: this request authenticated with a
-	// legacy (pre-Auth v2, NULL github_user_id) token. Phase 2 honours
+	// legacy (pre-Auth v2, NULL github_user_id) token. Phase 2 honors
 	// the request; Phase 5 will reject it.
 	DeprecationLegacyToken = "legacy-token"
 	// DeprecationStaleAllow signals: GitHub was unavailable, the prior
 	// positive cache entry within the 30-min grace window kept this
-	// connection alive. Honour with caution — the decision is up to 30 min
+	// connection alive. Honor with caution — the decision is up to 30 min
 	// old.
 	DeprecationStaleAllow = "stale-allow"
 )
