@@ -30,12 +30,27 @@ import (
 // maxBody caps the webhook payload we read (GitHub's documented ceiling is 25 MiB).
 const maxBody = 25 << 20
 
+// CacheFlusher is the subset of *repoaccess.Cache that webhook ingest calls
+// to invalidate per-user access decisions when GitHub tells us an installation
+// lost a repo (or the whole installation was removed). The Hub depends on the
+// interface — not the concrete type — so unit tests can plug in a fake and
+// the repoaccess import stays scoped to wiring (server + cmd/hub).
+type CacheFlusher interface {
+	// FlushRepo drops every cache entry for (installationID, fullName)
+	// regardless of user. Called from installation_repositories.removed.
+	FlushRepo(installationID, fullName string)
+	// FlushInstallation drops every cache entry for installationID. Called
+	// from installation.deleted.
+	FlushInstallation(installationID string)
+}
+
 // Hub holds the dependencies for handling webhooks and serving pending items.
 type Hub struct {
 	store   *store.Store
 	secret  []byte
 	settler *settle.Engine // may be nil (e.g. in unit tests of pure ingest)
 	mintFn  MintFunc       // nil → no auto-minting
+	flusher CacheFlusher   // nil → no Auth v2 cache invalidation (legacy / tests)
 }
 
 // New constructs a Hub. settler may be nil, in which case settles are not scheduled.
@@ -47,6 +62,14 @@ func New(st *store.Store, secret []byte, settler *settle.Engine) *Hub {
 // installation "created" event is received. Returns Hub for chaining.
 func (h *Hub) WithMintFunc(fn MintFunc) *Hub {
 	h.mintFn = fn
+	return h
+}
+
+// WithCacheFlusher sets the per-user repo-access cache to invalidate on
+// installation / installation_repositories webhook events. Returns Hub for
+// chaining. Safe to omit; nil-flusher Hubs simply skip the side effect.
+func (h *Hub) WithCacheFlusher(f CacheFlusher) *Hub {
+	h.flusher = f
 	return h
 }
 
@@ -291,6 +314,12 @@ func (h *Hub) handleInstallation(env github.Envelope) error {
 		if err := h.store.DeleteInstallation(installID); err != nil {
 			return fmt.Errorf("handleInstallation delete: %w", err)
 		}
+		// Auth v2: drop every cached repo-access decision for this
+		// installation. The installation is gone — no token under it
+		// should still see an "allow" the cache might still hold.
+		if h.flusher != nil {
+			h.flusher.FlushInstallation(installID)
+		}
 	}
 	return nil
 }
@@ -310,6 +339,12 @@ func (h *Hub) handleInstallationRepositories(env github.Envelope) error {
 	for _, r := range env.RepositoriesRemoved {
 		if err := h.store.RemoveInstallationRepo(installID, r.FullName); err != nil {
 			return fmt.Errorf("handleInstallationRepositories remove: %w", err)
+		}
+		// Auth v2: a repo leaving the installation must immediately
+		// invalidate any positive cache entry for that (instID, repo)
+		// regardless of user.
+		if h.flusher != nil {
+			h.flusher.FlushRepo(installID, r.FullName)
 		}
 	}
 	return nil

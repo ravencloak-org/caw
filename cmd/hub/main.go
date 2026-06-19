@@ -24,6 +24,7 @@ import (
 	"github.com/ravencloak-org/caw/internal/mergeability"
 	"github.com/ravencloak-org/caw/internal/observability"
 	"github.com/ravencloak-org/caw/internal/rebase"
+	"github.com/ravencloak-org/caw/internal/repoaccess"
 	"github.com/ravencloak-org/caw/internal/server"
 	"github.com/ravencloak-org/caw/internal/settle"
 	"github.com/ravencloak-org/caw/internal/sse"
@@ -156,7 +157,21 @@ func main() {
 		log.Println("warning: CAW_BASE_URL empty; self-service install-callback route disabled")
 	}
 
-	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, mintFn)
+	// Auth v2 Phase 2: per-user repo-access decision cache. The Checker
+	// reuses the App's installation-token client (already built above)
+	// to call /repos/{owner}/{repo}/collaborators/{username}/permission.
+	// When the App is not configured (no PEM, no manifest creds yet), the
+	// checker is nil — the cache then fails closed on every user-bound
+	// lookup, which is correct: an unconfigured Hub cannot authorize.
+	var repoChecker repoaccess.Checker
+	if itc := buildInstallTokenClient(cfg, st); itc != nil {
+		repoChecker = repoaccess.NewHTTPChecker(cfg.GitHubAPIBase, itc.Token, nil)
+	} else {
+		log.Println("warning: GitHub App credentials missing; per-user repo-access checks will fail closed for user-bound tokens")
+	}
+	repoCache := repoaccess.NewCache(repoChecker, repoaccess.Options{})
+
+	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, mintFn, repoCache)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
@@ -173,6 +188,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Auth v2 Phase 2: start the cache sweeper now that we have a cancellable
+	// context tied to the process lifetime.
+	repoCache.Start(ctx)
 	<-ctx.Done()
 
 	log.Println("shutting down")
