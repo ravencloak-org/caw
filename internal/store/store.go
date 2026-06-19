@@ -563,6 +563,117 @@ func (s *Store) ListTokensForUser(userID int64) ([]Token, error) {
 	return out, nil
 }
 
+// GetTokenByID returns the token row keyed on id. ok is false when no row
+// matches. Unlike VerifyToken this does NOT filter on revoked_at / expires_at
+// — the Phase 4 management surface needs to surface revoked rows in /me/tokens
+// and answer DELETE idempotently (re-DELETE of an already-revoked token reads
+// the row, sees the caller still owns it, and returns 204).
+func (s *Store) GetTokenByID(tokenID string) (Token, bool, error) {
+	if tokenID == "" {
+		return Token{}, false, nil
+	}
+	var t Token
+	var rowid int64
+	var id, gul, dl sql.NullString
+	var guid, exp, lu, rev sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT rowid, token_hash, installation_id, org, created_at,
+		        id, github_user_id, github_user_login, device_label,
+		        expires_at, last_used_at, revoked_at
+		 FROM tokens
+		 WHERE id = ?`,
+		tokenID,
+	).Scan(
+		&rowid, &t.Hash, &t.InstallationID, &t.Org, &t.CreatedAt,
+		&id, &guid, &gul, &dl, &exp, &lu, &rev,
+	)
+	switch {
+	case err == sql.ErrNoRows:
+		return Token{}, false, nil
+	case err != nil:
+		return Token{}, false, fmt.Errorf("get token by id: %w", err)
+	}
+	t.ID = id.String
+	if t.ID == "" {
+		t.ID = fmt.Sprintf("legacy-%d", rowid)
+	}
+	t.DeviceLabel = dl.String
+	if guid.Valid {
+		v := guid.Int64
+		t.GitHubUserID = &v
+	}
+	t.GitHubUserLogin = gul.String
+	if exp.Valid {
+		v := exp.Int64
+		t.ExpiresAt = &v
+	}
+	if lu.Valid {
+		v := lu.Int64
+		t.LastUsedAt = &v
+	}
+	if rev.Valid {
+		v := rev.Int64
+		t.RevokedAt = &v
+	}
+	return t, true, nil
+}
+
+// RevokeAllTokensForUser sets revoked_at = now on every still-active token
+// bound to userID. Idempotent: rows already revoked are not touched (their
+// original revoked_at stays the audit-of-record timestamp). Returns the
+// number of rows newly revoked by this call.
+//
+// Phase 4's POST /me/recover panic button: one transaction, every token
+// belonging to the user dies at the same wall-clock second so a leaked token
+// cannot keep working at the millisecond a sibling token revoked.
+func (s *Store) RevokeAllTokensForUser(userID int64, now int64) (int, error) {
+	if userID == 0 {
+		// Defensive: userID 0 is the legacy-token sentinel. Revoking "every
+		// legacy token in the table" is never what /me/recover wants.
+		return 0, nil
+	}
+	res, err := s.db.Exec(
+		`UPDATE tokens SET revoked_at = ?
+		 WHERE github_user_id = ? AND revoked_at IS NULL`,
+		now, userID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("revoke all tokens for user: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("revoke all tokens for user rows: %w", err)
+	}
+	return int(n), nil
+}
+
+// RevokeTokensForInstallation sets revoked_at = now on every still-active
+// token bound to installationID. Called from the installation.deleted
+// webhook handler: when GitHub tells us the App was uninstalled, the cached
+// repo-access decisions are flushed (Phase 2) AND the tokens themselves are
+// revoked at the persistence layer (Phase 4) — defense in depth.
+//
+// Returns the number of rows newly revoked. installationID == "" is a no-op
+// (never matches a real row).
+func (s *Store) RevokeTokensForInstallation(installationID string, now int64) (int, error) {
+	if installationID == "" {
+		return 0, nil
+	}
+	res, err := s.db.Exec(
+		`UPDATE tokens SET revoked_at = ?
+		 WHERE installation_id = ? AND revoked_at IS NULL`,
+		now, installationID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("revoke tokens for installation: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("revoke tokens for installation rows: %w", err)
+	}
+	return int(n), nil
+}
+
 // nullableInt converts a *int64 to a database value: nil pointer → SQL NULL,
 // non-nil → its dereferenced value.
 func nullableInt(p *int64) any {

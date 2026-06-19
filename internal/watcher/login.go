@@ -470,8 +470,14 @@ func Logout(ctx context.Context, hubURL, credentialsPath string, hc *http.Client
 			continue
 		}
 		_ = resp.Body.Close()
-		// /me/tokens lands in Phase 4 — until then a 404 here is expected
-		// and not a logout failure. Treat any 2xx OR 404 as success.
+		// Belt-and-suspenders: a 404 here is treated as success.
+		// /me/tokens/:id landed in Auth v2 Phase 4 and a freshly minted
+		// token always exists on the hub, but a stale credentials.json
+		// (operator revoked the token via `hub revoke-token` or the
+		// /me/recover panic button, then the user runs `logout` locally)
+		// will hit 404. Logout must always succeed locally — leaving a
+		// stale credentials.json in place because the server doesn't know
+		// the id is worse than the missed remote revoke.
 		if resp.StatusCode >= 500 {
 			log.Printf("logout: DELETE token %s returned %d", t.TokenID, resp.StatusCode)
 		}
