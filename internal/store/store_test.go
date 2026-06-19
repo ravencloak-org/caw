@@ -391,6 +391,130 @@ func TestTokensListForUser(t *testing.T) {
 	}
 }
 
+// TestTokensByGitHubUserID_FiltersActive proves the auth-v2 Phase 3.5
+// webhook fan-out lookup returns only active rows (not revoked, not expired)
+// for the requested user — revoked / expired devices must NOT receive
+// pr_opened events.
+func TestTokensByGitHubUserID_FiltersActive(t *testing.T) {
+	s := newTestStore(t)
+	uid := int64(42)
+	now := int64(1_700_000_100)
+	live := int64(1_700_001_000)
+	past := int64(1_700_000_050)
+	revokedAt := int64(1_700_000_080)
+
+	// Active row — should be returned.
+	if err := s.InsertTokenRow(Token{
+		ID:             "A0000000000000000000000000",
+		Hash:           "active",
+		InstallationID: "inst-1",
+		GitHubUserID:   &uid,
+		DeviceLabel:    "dev-1",
+		CreatedAt:      1_700_000_000,
+		ExpiresAt:      &live,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow active: %v", err)
+	}
+	// Revoked row — filtered.
+	if err := s.InsertTokenRow(Token{
+		ID:             "B0000000000000000000000000",
+		Hash:           "revoked",
+		InstallationID: "inst-1",
+		GitHubUserID:   &uid,
+		DeviceLabel:    "dev-2",
+		CreatedAt:      1_700_000_000,
+		ExpiresAt:      &live,
+		RevokedAt:      &revokedAt,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow revoked: %v", err)
+	}
+	// Expired row — filtered.
+	if err := s.InsertTokenRow(Token{
+		ID:             "C0000000000000000000000000",
+		Hash:           "expired",
+		InstallationID: "inst-1",
+		GitHubUserID:   &uid,
+		DeviceLabel:    "dev-3",
+		CreatedAt:      1_700_000_000,
+		ExpiresAt:      &past,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow expired: %v", err)
+	}
+	// Different user — filtered (cross-user isolation).
+	other := int64(99)
+	if err := s.InsertTokenRow(Token{
+		ID:             "D0000000000000000000000000",
+		Hash:           "other",
+		InstallationID: "inst-1",
+		GitHubUserID:   &other,
+		DeviceLabel:    "dev-4",
+		CreatedAt:      1_700_000_000,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow other: %v", err)
+	}
+
+	rows, err := s.TokensByGitHubUserID(uid, now)
+	if err != nil {
+		t.Fatalf("TokensByGitHubUserID: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 active", len(rows))
+	}
+	if rows[0].Hash != "active" {
+		t.Errorf("hash = %q, want active", rows[0].Hash)
+	}
+
+	// userID 0 is a sentinel for "legacy / unbound" and MUST return empty.
+	if rows, err := s.TokensByGitHubUserID(0, now); err != nil || len(rows) != 0 {
+		t.Errorf("TokensByGitHubUserID(0) = (%d rows, err=%v), want (0, nil)", len(rows), err)
+	}
+	// Unknown user → empty slice, no error.
+	if rows, err := s.TokensByGitHubUserID(int64(7777), now); err != nil || len(rows) != 0 {
+		t.Errorf("TokensByGitHubUserID unknown = (%d rows, err=%v)", len(rows), err)
+	}
+}
+
+// TestTokensForInstallation returns active tokens scoped to one installation;
+// auth-v2 Phase 3.5 uses it to find users with an active credential for an
+// installation when installation_repositories.added fires.
+func TestTokensForInstallation(t *testing.T) {
+	s := newTestStore(t)
+	uid := int64(42)
+	now := int64(1_700_000_100)
+	live := int64(1_700_001_000)
+
+	if err := s.InsertTokenRow(Token{
+		ID:             "A0000000000000000000000000",
+		Hash:           "instA-1",
+		InstallationID: "inst-A",
+		GitHubUserID:   &uid,
+		DeviceLabel:    "dev",
+		CreatedAt:      1_700_000_000,
+		ExpiresAt:      &live,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow: %v", err)
+	}
+	if err := s.InsertTokenRow(Token{
+		ID:             "B0000000000000000000000000",
+		Hash:           "instB-1",
+		InstallationID: "inst-B",
+		GitHubUserID:   &uid,
+		DeviceLabel:    "dev",
+		CreatedAt:      1_700_000_000,
+		ExpiresAt:      &live,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow: %v", err)
+	}
+
+	rows, err := s.TokensForInstallation("inst-A", now)
+	if err != nil {
+		t.Fatalf("TokensForInstallation: %v", err)
+	}
+	if len(rows) != 1 || rows[0].InstallationID != "inst-A" {
+		t.Fatalf("rows = %+v, want one inst-A row", rows)
+	}
+}
+
 // TestUpdateInstallationAppSlug updates a previously-upserted installation.
 func TestUpdateInstallationAppSlug(t *testing.T) {
 	s := newTestStore(t)

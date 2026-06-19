@@ -36,6 +36,7 @@ import (
 func New(
 	st *store.Store,
 	sseHub *sse.Hub,
+	controlHub *sse.ControlHub,
 	engine *settle.Engine,
 	secret []byte,
 	mh *hub.ManifestHandler,
@@ -56,6 +57,11 @@ func New(
 		// The Hub fan-outs cache invalidation from the relevant webhook
 		// events (installation.deleted, installation_repositories.removed).
 		h.WithCacheFlusher(repoAccess)
+	}
+	if controlHub != nil {
+		// Auth-v2 Phase 3.5: webhook ingest fans `pr_opened` / `pr_closed`
+		// and `installation_added` through this publisher.
+		h.WithControlPublisher(controlPublisherAdapter{controlHub})
 	}
 	r.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", landingHTML)
@@ -107,6 +113,14 @@ func New(
 	r.PUT("/leases/:owner/:repo/:number/heartbeat", authMW, scopeMW, accessMW, h.HandleRenewLease)
 	r.DELETE("/leases/:owner/:repo/:number", authMW, scopeMW, accessMW, h.HandleReleaseLease)
 
+	// Auth-v2 Phase 3.5 (issue #60): per-user control stream. auth.Required
+	// ONLY — no RequireRepoScope / RequireRepoAccess because the stream is
+	// keyed on the authenticated user, not a repo. Legacy (NULL github_user_id)
+	// tokens are rejected at the handler with a 400 explaining the fix.
+	if controlHub != nil {
+		r.GET("/sse/me/control", authMW, controlHub.ControlHandler(controlUserIDFromContext))
+	}
+
 	return r
 }
 
@@ -114,4 +128,25 @@ func New(
 // settle.PRKey's format (owner/repo#number).
 func sseKey(c *gin.Context) string {
 	return fmt.Sprintf("%s/%s#%s", c.Param("owner"), c.Param("repo"), c.Param("number"))
+}
+
+// controlPublisherAdapter adapts *sse.ControlHub to hub.ControlPublisher.
+// The interface lives in `hub` so webhook ingest doesn't import `sse`; this
+// glue keeps that boundary while letting cmd/hub wire the one concrete impl.
+type controlPublisherAdapter struct{ hub *sse.ControlHub }
+
+func (a controlPublisherAdapter) Publish(userID int64, name string, data []byte) int {
+	return a.hub.Publish(userID, sse.ControlEvent{Name: name, Data: data})
+}
+
+// controlUserIDFromContext pulls the auth-v2 github_user_id out of the gin
+// context that auth.Required populated. ok=false signals "legacy / unbound",
+// which the control handler turns into a 400 + actionable message.
+func controlUserIDFromContext(c *gin.Context) (int64, bool) {
+	v, present := c.Get(auth.ContextGitHubUserID)
+	if !present {
+		return 0, false
+	}
+	id, ok := v.(int64)
+	return id, ok && id != 0
 }
