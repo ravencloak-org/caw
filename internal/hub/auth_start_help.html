@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>caw — log in from your agent</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<style>
+:root { color-scheme: light dark; --fg: #111; --bg: #fff; --muted: #555; --accent: #0066cc; --border: #ddd; --code-bg: #f4f4f4; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #eee; --bg: #161616; --muted: #aaa; --accent: #5aa8ff; --border: #333; --code-bg: #202020; }
+}
+html, body { background: var(--bg); color: var(--fg); margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.5; }
+main { max-width: 640px; margin: 2.5rem auto; padding: 0 1.25rem; }
+h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+ol { padding-left: 1.25rem; }
+li { margin: 0.5rem 0; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }
+.meta { color: var(--muted); font-size: 0.85rem; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Log in from your agent</h1>
+  <p>caw login is initiated from inside the MCP plugin running in your coding agent — not from this page.</p>
+  <ol>
+    <li>Open your agent (Claude Desktop, Cursor, Codex CLI, etc.) with the <code>caw-watcher</code> MCP enabled.</li>
+    <li>Invoke the <code>login</code> tool. Your agent will open this site in your browser automatically.</li>
+    <li>Complete the GitHub OAuth dance, pick your installations, and return to your agent.</li>
+  </ol>
+  <p class="meta">If your agent doesn't show a <code>login</code> tool yet, update <code>caw-watcher</code> to the v0.2+ release.</p>
+  <hr>
+  <p class="meta">Hub: <a href="{{.HubURL}}">{{.HubURL}}</a></p>
+</main>
+</body>
+</html>

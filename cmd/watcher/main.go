@@ -121,6 +121,27 @@ func newServer(client *watcher.Client) *mcp.Server {
 			"The git repository must be checked out in the directory specified by repo_dir.",
 	}, makeRebasePR(client))
 
+	// Auth v2 Phase 3 tools — issue #59.
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "login",
+		Description: "Log this device into the caw hub. Opens a browser to the hub's /auth/u/<session> page " +
+			"(loopback default; force_device=true uses the OAuth device flow for sandboxed environments). " +
+			"After you finish GitHub OAuth + pick installations, the resulting token bundle is persisted to " +
+			"~/.config/caw/credentials.json (mode 0600). Subsequent get_pending / subscribe_pr calls use those tokens.",
+	}, makeLogin(client))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "logout",
+		Description: "Revoke every token in this device's credentials.json server-side, then clear the file. " +
+			"Other devices keep working — only this device is logged out.",
+	}, makeLogout(client))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "auth_status",
+		Description: "Show who this device is logged in as on the caw hub, plus the installations and expiry " +
+			"of each bound token. Token values themselves are never shown.",
+	}, makeAuthStatus(client))
+
 	// SessionStart reminder surfaced as an MCP prompt the agent can fetch. The
 	// Claude Code harness also fires a SessionStart hook (.claude/settings.json)
 	// that injects the same nudge.

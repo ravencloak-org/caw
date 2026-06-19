@@ -612,6 +612,25 @@ func (s *Store) UpdateInstallationAppSlug(installationID, slug string) error {
 	return nil
 }
 
+// AnyAppSlug returns a non-empty app_slug from any installations row, or "" if
+// none has one yet. All installations of the same App share the same slug, so
+// the first non-empty wins. Used by Auth v2's /auth/cb/github handler when it
+// needs to redirect a user with zero installations to the App install URL —
+// the env CAW_APP_SLUG override always wins over this fallback.
+func (s *Store) AnyAppSlug() (string, error) {
+	var slug string
+	err := s.db.QueryRow(
+		`SELECT app_slug FROM installations WHERE app_slug != '' ORDER BY rowid LIMIT 1`,
+	).Scan(&slug)
+	switch {
+	case err == sql.ErrNoRows:
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("any app slug: %w", err)
+	}
+	return slug, nil
+}
+
 // DeleteInstallation removes an installation and all its repo associations.
 func (s *Store) DeleteInstallation(installationID string) error {
 	if _, err := s.db.Exec(

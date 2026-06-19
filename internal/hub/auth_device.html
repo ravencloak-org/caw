@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>caw — device login</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<style>
+:root { color-scheme: light dark; --fg: #111; --bg: #fff; --muted: #555; --accent: #0066cc; --err-bg: #fde7e7; --err-fg: #8b1a1a; --border: #ddd; --code-bg: #f4f4f4; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #eee; --bg: #161616; --muted: #aaa; --accent: #5aa8ff; --err-bg: #3a1010; --err-fg: #ffb0b0; --border: #333; --code-bg: #202020; }
+}
+html, body { background: var(--bg); color: var(--fg); margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.5; }
+main { max-width: 560px; margin: 2.5rem auto; padding: 0 1.25rem; }
+h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+form { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1rem; }
+input[type=text] { padding: 0.65rem 0.85rem; font-size: 1.2rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.1em; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); text-align: center; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 0.7rem 1.2rem; font-size: 1rem; font-weight: 600; cursor: pointer; }
+button:hover { filter: brightness(1.1); }
+.banner { background: var(--err-bg); color: var(--err-fg); padding: 0.5rem 0.85rem; border-radius: 6px; margin: 0.75rem 0; font-size: 0.9rem; }
+.meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Enter your device code</h1>
+  <p class="meta">Your agent printed a code like <code>WDJB-MJHT</code>. Paste it below to start the login.</p>
+
+  {{if .ErrorMessage}}<div class="banner">{{.ErrorMessage}}</div>{{end}}
+
+  <form method="GET" action="/auth/device" autocomplete="off">
+    <input type="text" name="code" value="{{.PrefilledCode}}" placeholder="XXXX-XXXX" maxlength="9" required autofocus>
+    <button type="submit">Continue with GitHub</button>
+  </form>
+</main>
+</body>
+</html>

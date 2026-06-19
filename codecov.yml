@@ -9,9 +9,13 @@ coverage:
         target: 80%       # new/changed code must be well covered
         threshold: 5%
 
-# main() is thin server wiring exercised by running the binary, not unit tests.
+# Thin server / MCP-tool wiring — exercised by running the binary, not by
+# unit tests. The actual logic these files call into lives in internal/
+# packages, which are covered there.
 ignore:
   - "cmd/hub/main.go"
+  - "cmd/watcher/main.go"
+  - "cmd/watcher/auth_tools.go"
 
 # Coverage is uploaded under two flags from two CI jobs (see .github/workflows/ci.yml):
 #   unit        — every package except internal/server

@@ -76,7 +76,7 @@ func newTestServerOpts(t *testing.T, grace time.Duration, optsFn func(*store.Sto
 	// the Auth v2 RequireRepoAccess middleware before ever touching the
 	// cache's Checker seam, so a checker-less cache is sufficient here.
 	cache := repoaccess.NewCache(nil, repoaccess.Options{})
-	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil, nil, cache))
+	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil, nil, nil, cache))
 	t.Cleanup(ts.Close)
 	return ts, raw, st
 }

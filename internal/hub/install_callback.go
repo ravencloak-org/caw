@@ -12,8 +12,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/ravencloak-org/caw/internal/store"
 )
 
 //go:embed install_callback.html
@@ -50,6 +53,11 @@ type InstallCallbackHandler struct {
 	httpClient HTTPDoer
 	tmpl       *template.Template
 	errorTmpl  *template.Template
+	// Phase 3 session-resume dependencies. When sessionStore is nil the
+	// resume branch is disabled and the handler keeps Phase 0 / 1 behavior
+	// (one-shot HTML reveal).
+	sessionStore *store.Store
+	now          func() int64
 }
 
 // HTTPDoer is satisfied by *http.Client and is the seam tests use to stub
@@ -89,6 +97,15 @@ type InstallCallbackConfig struct {
 	// HTTPClient overrides the HTTP client used for GitHub OAuth + REST calls.
 	// Defaults to http.DefaultClient.
 	HTTPClient HTTPDoer
+	// SessionStore enables Auth v2 session resume (Phase 3): when the install
+	// callback carries a `state` query that matches a live auth_sessions row
+	// in `awaiting_install`, the handler skips the legacy one-shot reveal and
+	// hands the user back to /auth/picker/:session_id instead. Optional —
+	// pre-Phase-3 self-hosters can leave it nil and the legacy path stays.
+	SessionStore *store.Store
+	// Now is the clock seam for session-expiry checks. Defaults to a wrapper
+	// over time.Now().Unix().
+	Now func() int64
 }
 
 // MintFunc is the signature for the Hub's token mint function. It is shared by
@@ -128,15 +145,25 @@ func NewInstallCallbackHandler(cfg InstallCallbackConfig) (*InstallCallbackHandl
 		return nil, fmt.Errorf("NewInstallCallbackHandler parse error template: %w", err)
 	}
 	return &InstallCallbackHandler{
-		baseURL:    cfg.BaseURL,
-		githubBase: gh,
-		apiBase:    api,
-		credsFn:    cfg.CredsFn,
-		mintFn:     cfg.MintFn,
-		httpClient: hc,
-		tmpl:       tmpl,
-		errorTmpl:  errorTmpl,
+		baseURL:      cfg.BaseURL,
+		githubBase:   gh,
+		apiBase:      api,
+		credsFn:      cfg.CredsFn,
+		mintFn:       cfg.MintFn,
+		httpClient:   hc,
+		tmpl:         tmpl,
+		errorTmpl:    errorTmpl,
+		sessionStore: cfg.SessionStore,
+		now:          orDefaultNow(cfg.Now),
 	}, nil
+}
+
+// orDefaultNow returns fn or a time.Now().Unix() shim when fn is nil.
+func orDefaultNow(fn func() int64) func() int64 {
+	if fn != nil {
+		return fn
+	}
+	return func() int64 { return time.Now().Unix() }
 }
 
 // Handle serves GET /github/app/install/callback.
@@ -195,6 +222,17 @@ func (h *InstallCallbackHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// Auth v2 session resume (Phase 3): if state= matches a live
+	// auth_sessions row in awaiting_install, hand the user back to
+	// /auth/picker/:session_id instead of the legacy one-shot reveal. The
+	// session_id was the state= we sent with the install redirect from
+	// /auth/cb/github. We do the OAuth exchange + user fetch + install list
+	// fetch up-front so the picker has everything it needs.
+	if sessionID := c.Query("state"); sessionID != "" && h.sessionStore != nil {
+		if h.tryResumeAuthSession(c, sessionID, clientID, clientSecret, code, installID) {
+			return
+		}
+	}
 	ctx := c.Request.Context()
 	userToken, err := h.exchangeOAuthCode(ctx, clientID, clientSecret, code)
 	if err != nil {
@@ -349,6 +387,14 @@ var installErrorCopy = map[string]errorCopy{
 			"This is a hub-side internal error — usually a database write failure.",
 			"Operator: check the hub logs for the install-callback line that preceded this page.",
 			"Wait a minute and try again.",
+		},
+		retryLabel: "Restart login",
+	},
+	"session_expired": {
+		title: "Login session expired during install",
+		steps: []string{
+			"Your /auth/start session has a 10-minute lifetime and yours ran out before you finished installing the App.",
+			"Restart the login tool from your agent — the App you just installed is already attached to your account and the next attempt will skip the install step.",
 		},
 		retryLabel: "Restart login",
 	},
@@ -518,4 +564,100 @@ func (h *InstallCallbackHandler) userOwnsInstallation(ctx context.Context, userT
 		}
 	}
 	return "", false, nil
+}
+
+// tryResumeAuthSession attempts the Phase 3 auth-session resume branch.
+// Returns true if it took ownership of the response (success → 302 to picker,
+// failure → renders an error page); false if the resume path doesn't apply
+// (session not found / not in awaiting_install) and the caller should fall
+// through to the legacy one-shot reveal.
+func (h *InstallCallbackHandler) tryResumeAuthSession(c *gin.Context, sessionID, clientID, clientSecret, code, installID string) bool {
+	a, ok, err := h.sessionStore.GetAuthSession(sessionID)
+	if err != nil {
+		log.Printf("install callback resume: GetAuthSession: %v", err)
+		// Don't 500 the legacy path on a store read failure; fall through.
+		return false
+	}
+	if !ok {
+		return false
+	}
+	if a.State != "awaiting_install" && a.State != "pending" {
+		// Already delivered or canceled — fall through to legacy reveal so
+		// the user still gets something useful (a working token).
+		return false
+	}
+	if h.now() >= a.ExpiresAt {
+		h.renderError(c, http.StatusGone, "session_expired",
+			"Your login session expired while installing the App. Restart the login tool from your agent.",
+			h.restartURL())
+		return true
+	}
+
+	ctx := c.Request.Context()
+	userToken, err := h.exchangeOAuthCode(ctx, clientID, clientSecret, code)
+	if err != nil {
+		log.Printf("install callback resume: exchangeOAuthCode: %v", err)
+		h.renderError(c, http.StatusBadGateway, "oauth_exchange_failed",
+			"GitHub refused to exchange the OAuth code for an access token — the code may have expired or been reused.",
+			h.restartURL())
+		return true
+	}
+	user, err := fetchUser(ctx, h.httpClient, h.apiBase, userToken)
+	if err != nil {
+		log.Printf("install callback resume: fetchUser: %v", err)
+		h.renderError(c, http.StatusBadGateway, "installations_lookup_failed",
+			"Hub couldn't fetch your GitHub identity after the OAuth exchange.",
+			h.restartURL())
+		return true
+	}
+	installs, err := listUserInstallations(ctx, h.httpClient, h.apiBase, userToken)
+	if err != nil {
+		log.Printf("install callback resume: listUserInstallations: %v", err)
+		h.renderError(c, http.StatusBadGateway, "installations_lookup_failed",
+			"Hub couldn't list your GitHub installations after the OAuth exchange.",
+			h.restartURL())
+		return true
+	}
+	// Sanity: the installation_id GitHub redirected us with MUST appear in
+	// the user's installation list, otherwise we're being asked to bind a
+	// token to an install the user can't see.
+	found := false
+	for _, in := range installs {
+		if fmt.Sprintf("%d", in.ID) == installID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		h.renderError(c, http.StatusForbidden, "not_an_admin",
+			"The installation you just created isn't visible on your account — refusing to mint a token.",
+			h.restartURL())
+		return true
+	}
+
+	if err := h.sessionStore.SetSessionUser(a.ID, user.ID, user.Login); err != nil {
+		log.Printf("install callback resume: SetSessionUser: %v", err)
+		h.renderError(c, http.StatusInternalServerError, "mint_failed",
+			"Hub couldn't persist your GitHub identity to the session.", "")
+		return true
+	}
+	encoded, err := json.Marshal(installs)
+	if err != nil {
+		log.Printf("install callback resume: marshal installs: %v", err)
+		h.renderError(c, http.StatusInternalServerError, "mint_failed",
+			"Hub couldn't persist the install list to the session.", "")
+		return true
+	}
+	if err := h.sessionStore.SetSessionPendingBundle(a.ID, string(encoded)); err != nil {
+		log.Printf("install callback resume: SetSessionPendingBundle: %v", err)
+		h.renderError(c, http.StatusInternalServerError, "mint_failed",
+			"Hub couldn't persist the install list to the session.", "")
+		return true
+	}
+	if err := h.sessionStore.UpdateAuthSessionState(a.ID, "awaiting_picker"); err != nil {
+		log.Printf("install callback resume: UpdateAuthSessionState: %v", err)
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Redirect(http.StatusFound, "/auth/picker/"+a.ID)
+	return true
 }

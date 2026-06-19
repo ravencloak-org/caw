@@ -80,6 +80,11 @@ func NewClient(hubURL, token string) *Client {
 	}
 }
 
+// HubURL returns the hub base URL the client was constructed with. Auth v2
+// Phase 3 uses this so the `login` MCP tool can resolve "hub_url omitted"
+// to whatever the watcher was started with.
+func (c *Client) HubURL() string { return c.hubURL }
+
 // newRequest builds an authenticated request.
 func (c *Client) newRequest(ctx context.Context, method, path string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.hubURL+path, nil)

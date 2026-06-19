@@ -26,10 +26,11 @@ import (
 // mintFn is optional: when non-nil it is passed to the Hub so that installation
 // "created" webhook events automatically mint a Hub token.
 // repoAccess is required: it backs the Auth v2 RequireRepoAccess middleware on
-// /sse/..., /pending, /leases/... — legacy (NULL github_user_id) tokens bypass
-// with a Deprecation header (Phase 2; enforcement starts in Phase 5). Tests
-// that exercise only legacy tokens may pass repoaccess.NewCache(nil, …) and
-// never reach the cache's checker seam.
+// /sse/... and /leases/... — legacy (NULL github_user_id) tokens bypass with a
+// Deprecation header (Phase 2; enforcement starts in Phase 5). /pending only
+// uses the bearer auth (no per-repo path params; per-user filtering arrives
+// with Phase 4's /me/* surface). Tests that exercise only legacy tokens may
+// pass repoaccess.NewCache(nil, …) and never reach the cache's checker seam.
 func New(
 	st *store.Store,
 	sseHub *sse.Hub,
@@ -37,6 +38,7 @@ func New(
 	secret []byte,
 	mh *hub.ManifestHandler,
 	ich *hub.InstallCallbackHandler,
+	ash *hub.AuthSessionHandler,
 	mintFn hub.MintFunc,
 	repoAccess *repoaccess.Cache,
 ) *gin.Engine {
@@ -64,6 +66,21 @@ func New(
 	}
 	if ich != nil {
 		r.GET("/github/app/install/callback", ich.Handle)
+	}
+
+	// Auth v2 Phase 3 /auth/* surface (issue #59). Distinct route group from
+	// /github/app/install/callback — install_callback handles GitHub's setup
+	// URL, /auth/* drives the MCP-initiated login wire protocol.
+	if ash != nil {
+		r.POST("/auth/start", ash.HandleStart)
+		r.GET("/auth/start-help", ash.HandleStartHelp)
+		r.GET("/auth/u/:session_id", ash.HandleBrowserStart)
+		r.GET("/auth/cb/github", ash.HandleGithubCallback)
+		r.GET("/auth/picker/:session_id", ash.HandlePickerGet)
+		r.POST("/auth/picker/:session_id", ash.HandlePickerPost)
+		r.GET("/auth/device", ash.HandleDevice)
+		r.POST("/auth/poll", ash.HandlePoll)
+		r.GET("/auth/done/:session_id", ash.HandleDone)
 	}
 
 	authMW := auth.Required(st)
