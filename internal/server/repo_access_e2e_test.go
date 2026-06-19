@@ -136,7 +136,7 @@ func newAuthHarness(t *testing.T, nowFn func() time.Time) *authHarness {
 
 	sseHub := sse.New()
 	engine := settle.New(st, sseHub, 30*time.Millisecond)
-	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil, nil, nil, cache))
+	ts := httptest.NewServer(server.New(st, sseHub, sse.NewControlHub(), engine, []byte(secret), nil, nil, nil, nil, cache))
 	t.Cleanup(ts.Close)
 
 	return &authHarness{

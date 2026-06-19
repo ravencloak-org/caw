@@ -67,6 +67,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Auth-v2 Phase 3.5 (issue #60): the control-stream consumer is spawned
+	// once on startup. The pump is a noop adapter for now — the auto-
+	// subscribed PRs flow into the existing pending store (the hub sees no
+	// PR-side subscriber for them and falls back to pending, which the
+	// agent already polls via `get_pending`). A future phase replaces the
+	// noop pump with a real per-PR SSE consumer + local summary buffer.
+	startControlLoop(ctx, cfg.HubURL)
+
 	srv := newServer(client)
 
 	log.Printf("starting MCP stdio server (hub=%s)", cfg.HubURL)

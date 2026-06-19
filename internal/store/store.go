@@ -563,6 +563,148 @@ func (s *Store) ListTokensForUser(userID int64) ([]Token, error) {
 	return out, nil
 }
 
+// TokensByGitHubUserID returns every ACTIVE (not revoked, not expired) token
+// row bound to userID. The auth-v2 Phase 3.5 webhook fan-out uses it to find
+// which control-stream subscribers should receive a pr_opened / pr_closed /
+// installation_added event for a webhook sender.
+//
+// Filtering on revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)
+// keeps a revoked or expired device from receiving notifications about a PR
+// the user just opened. now is the caller's clock (Unix seconds) so tests can
+// inject a fixed value.
+//
+// Returns an empty slice when userID has no matching active rows. userID == 0
+// returns an empty slice — no legacy row carries a non-zero github_user_id,
+// and 0 here would otherwise bleed into the legacy population by accident.
+func (s *Store) TokensByGitHubUserID(userID, now int64) ([]Token, error) {
+	if userID == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(
+		`SELECT rowid, token_hash, installation_id, org, created_at,
+		        id, github_user_id, github_user_login, device_label,
+		        expires_at, last_used_at, revoked_at
+		 FROM tokens
+		 WHERE github_user_id = ?
+		   AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > ?)
+		 ORDER BY created_at DESC, rowid DESC`,
+		userID, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tokens by github_user_id: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Token
+	for rows.Next() {
+		var t Token
+		var rowid int64
+		var id, gul, dl sql.NullString
+		var guid, exp, lu, rev sql.NullInt64
+		if err := rows.Scan(
+			&rowid, &t.Hash, &t.InstallationID, &t.Org, &t.CreatedAt,
+			&id, &guid, &gul, &dl, &exp, &lu, &rev,
+		); err != nil {
+			return nil, fmt.Errorf("tokens by user scan: %w", err)
+		}
+		t.ID = id.String
+		if t.ID == "" {
+			t.ID = fmt.Sprintf("legacy-%d", rowid)
+		}
+		t.DeviceLabel = dl.String
+		if guid.Valid {
+			v := guid.Int64
+			t.GitHubUserID = &v
+		}
+		t.GitHubUserLogin = gul.String
+		if exp.Valid {
+			v := exp.Int64
+			t.ExpiresAt = &v
+		}
+		if lu.Valid {
+			v := lu.Int64
+			t.LastUsedAt = &v
+		}
+		if rev.Valid {
+			v := rev.Int64
+			t.RevokedAt = &v
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tokens by user iterate: %w", err)
+	}
+	return out, nil
+}
+
+// TokensForInstallation returns every ACTIVE token row bound to installID.
+// The auth-v2 Phase 3.5 installation_repositories.added fan-out uses it to
+// find which users (each holding at least one token in this installation)
+// should hear the `installation_added` control event.
+//
+// Same active-row filter as TokensByGitHubUserID. Tokens with NULL
+// github_user_id (legacy rows) are returned — the caller filters them out
+// since the control stream is user-bound.
+func (s *Store) TokensForInstallation(installID string, now int64) ([]Token, error) {
+	rows, err := s.db.Query(
+		`SELECT rowid, token_hash, installation_id, org, created_at,
+		        id, github_user_id, github_user_login, device_label,
+		        expires_at, last_used_at, revoked_at
+		 FROM tokens
+		 WHERE installation_id = ?
+		   AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > ?)
+		 ORDER BY created_at DESC, rowid DESC`,
+		installID, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tokens for installation: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Token
+	for rows.Next() {
+		var t Token
+		var rowid int64
+		var id, gul, dl sql.NullString
+		var guid, exp, lu, rev sql.NullInt64
+		if err := rows.Scan(
+			&rowid, &t.Hash, &t.InstallationID, &t.Org, &t.CreatedAt,
+			&id, &guid, &gul, &dl, &exp, &lu, &rev,
+		); err != nil {
+			return nil, fmt.Errorf("tokens for installation scan: %w", err)
+		}
+		t.ID = id.String
+		if t.ID == "" {
+			t.ID = fmt.Sprintf("legacy-%d", rowid)
+		}
+		t.DeviceLabel = dl.String
+		if guid.Valid {
+			v := guid.Int64
+			t.GitHubUserID = &v
+		}
+		t.GitHubUserLogin = gul.String
+		if exp.Valid {
+			v := exp.Int64
+			t.ExpiresAt = &v
+		}
+		if lu.Valid {
+			v := lu.Int64
+			t.LastUsedAt = &v
+		}
+		if rev.Valid {
+			v := rev.Int64
+			t.RevokedAt = &v
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tokens for installation iterate: %w", err)
+	}
+	return out, nil
+}
+
 // nullableInt converts a *int64 to a database value: nil pointer → SQL NULL,
 // non-nil → its dereferenced value.
 func nullableInt(p *int64) any {
