@@ -10,6 +10,7 @@ import (
 
 	"github.com/ravencloak-org/caw/internal/auth"
 	"github.com/ravencloak-org/caw/internal/hub"
+	"github.com/ravencloak-org/caw/internal/repoaccess"
 	"github.com/ravencloak-org/caw/internal/settle"
 	"github.com/ravencloak-org/caw/internal/sse"
 	"github.com/ravencloak-org/caw/internal/store"
@@ -24,13 +25,34 @@ import (
 // registered (ADR-0010 — self-service Watcher token issuance).
 // mintFn is optional: when non-nil it is passed to the Hub so that installation
 // "created" webhook events automatically mint a Hub token.
-func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte, mh *hub.ManifestHandler, ich *hub.InstallCallbackHandler, ash *hub.AuthSessionHandler, mintFn hub.MintFunc) *gin.Engine {
+// repoAccess is required: it backs the Auth v2 RequireRepoAccess middleware on
+// /sse/... and /leases/... — legacy (NULL github_user_id) tokens bypass with a
+// Deprecation header (Phase 2; enforcement starts in Phase 5). /pending only
+// uses the bearer auth (no per-repo path params; per-user filtering arrives
+// with Phase 4's /me/* surface). Tests that exercise only legacy tokens may
+// pass repoaccess.NewCache(nil, …) and never reach the cache's checker seam.
+func New(
+	st *store.Store,
+	sseHub *sse.Hub,
+	engine *settle.Engine,
+	secret []byte,
+	mh *hub.ManifestHandler,
+	ich *hub.InstallCallbackHandler,
+	ash *hub.AuthSessionHandler,
+	mintFn hub.MintFunc,
+	repoAccess *repoaccess.Cache,
+) *gin.Engine {
 	r := gin.New()
 	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
 
 	h := hub.New(st, secret, engine)
 	if mintFn != nil {
 		h.WithMintFunc(mintFn)
+	}
+	if repoAccess != nil {
+		// The Hub fan-outs cache invalidation from the relevant webhook
+		// events (installation.deleted, installation_repositories.removed).
+		h.WithCacheFlusher(repoAccess)
 	}
 	r.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", landingHTML)
@@ -63,11 +85,12 @@ func New(st *store.Store, sseHub *sse.Hub, engine *settle.Engine, secret []byte,
 
 	authMW := auth.Required(st)
 	scopeMW := hub.RequireRepoScope(st)
+	accessMW := hub.RequireRepoAccess(repoAccess)
 	r.GET("/pending", authMW, h.HandlePending)
-	r.GET("/sse/:owner/:repo/:number", authMW, scopeMW, sseHub.Handler(sseKey))
-	r.POST("/leases/:owner/:repo/:number", authMW, scopeMW, h.HandleAcquireLease)
-	r.PUT("/leases/:owner/:repo/:number/heartbeat", authMW, scopeMW, h.HandleRenewLease)
-	r.DELETE("/leases/:owner/:repo/:number", authMW, scopeMW, h.HandleReleaseLease)
+	r.GET("/sse/:owner/:repo/:number", authMW, scopeMW, accessMW, sseHub.Handler(sseKey))
+	r.POST("/leases/:owner/:repo/:number", authMW, scopeMW, accessMW, h.HandleAcquireLease)
+	r.PUT("/leases/:owner/:repo/:number/heartbeat", authMW, scopeMW, accessMW, h.HandleRenewLease)
+	r.DELETE("/leases/:owner/:repo/:number", authMW, scopeMW, accessMW, h.HandleReleaseLease)
 
 	return r
 }

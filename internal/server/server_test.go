@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/ravencloak-org/caw/internal/auth"
+	"github.com/ravencloak-org/caw/internal/repoaccess"
 	"github.com/ravencloak-org/caw/internal/server"
 	"github.com/ravencloak-org/caw/internal/settle"
 	"github.com/ravencloak-org/caw/internal/sse"
@@ -71,7 +72,11 @@ func newTestServerOpts(t *testing.T, grace time.Duration, optsFn func(*store.Sto
 		opts = optsFn(st)
 	}
 	engine := settle.New(st, sseHub, grace, opts...)
-	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil, nil, nil))
+	// Existing tests use legacy (NULL github_user_id) tokens — they bypass
+	// the Auth v2 RequireRepoAccess middleware before ever touching the
+	// cache's Checker seam, so a checker-less cache is sufficient here.
+	cache := repoaccess.NewCache(nil, repoaccess.Options{})
+	ts := httptest.NewServer(server.New(st, sseHub, engine, []byte(secret), nil, nil, nil, nil, cache))
 	t.Cleanup(ts.Close)
 	return ts, raw, st
 }
