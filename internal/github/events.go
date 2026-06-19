@@ -10,13 +10,18 @@ type Repository struct {
 	} `json:"owner"`
 }
 
-// PullRequest carries the PR number, state, and head SHA.
+// PullRequest carries the PR number, state, head SHA, and author. User is the
+// PR author (auth-v2 Phase 3.5 surfaces author_login on the control stream).
 type PullRequest struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
 	Head   struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
+	User struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+	} `json:"user"`
 }
 
 // CheckSuitePR is a PR reference inside a check_suite payload.
@@ -81,7 +86,11 @@ type Envelope struct {
 	// installation_repositories events for the delta.
 	RepositoriesAdded   []Repository `json:"repositories_added"`
 	RepositoriesRemoved []Repository `json:"repositories_removed"`
-	Sender              struct {
+	// Sender is the actor of the event. ID matches github_user_id on
+	// auth-v2 tokens; auth-v2 Phase 3.5 fans pr_opened / pr_closed /
+	// installation_added events through the control hub keyed on Sender.ID.
+	Sender struct {
 		Login string `json:"login"`
+		ID    int64  `json:"id"`
 	} `json:"sender"`
 }

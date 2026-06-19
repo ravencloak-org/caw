@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel"
@@ -44,13 +45,27 @@ type CacheFlusher interface {
 	FlushInstallation(installationID string)
 }
 
+// ControlPublisher is the subset of *sse.ControlHub that webhook ingest calls
+// to fan auth-v2 Phase 3.5 control-stream events (pr_opened / pr_closed /
+// installation_added) out to the live MCP plugins of one github_user_id.
+// Same indirection pattern as CacheFlusher: the Hub depends on the interface,
+// not on the concrete type, so test files plug a fake and the sse package
+// import stays scoped to wiring (server + cmd/hub).
+type ControlPublisher interface {
+	// Publish delivers a control event to every live subscriber of userID.
+	// Returns the number of subscribers reached; zero is a no-op.
+	Publish(userID int64, name string, data []byte) int
+}
+
 // Hub holds the dependencies for handling webhooks and serving pending items.
 type Hub struct {
 	store   *store.Store
 	secret  []byte
-	settler *settle.Engine // may be nil (e.g. in unit tests of pure ingest)
-	mintFn  MintFunc       // nil → no auto-minting
-	flusher CacheFlusher   // nil → no Auth v2 cache invalidation (legacy / tests)
+	settler *settle.Engine   // may be nil (e.g. in unit tests of pure ingest)
+	mintFn  MintFunc         // nil → no auto-minting
+	flusher CacheFlusher     // nil → no Auth v2 cache invalidation (legacy / tests)
+	control ControlPublisher // nil → no Phase 3.5 control-stream fan-out
+	nowFn   func() int64     // injectable clock for the active-token filter (tests)
 }
 
 // New constructs a Hub. settler may be nil, in which case settles are not scheduled.
@@ -71,6 +86,27 @@ func (h *Hub) WithMintFunc(fn MintFunc) *Hub {
 func (h *Hub) WithCacheFlusher(f CacheFlusher) *Hub {
 	h.flusher = f
 	return h
+}
+
+// WithControlPublisher sets the auth-v2 Phase 3.5 control-stream publisher
+// the webhook ingest calls when a pr_opened / pr_closed / installation_added
+// event needs to fan out to every live MCP plugin of the matching
+// github_user_id. Safe to omit; nil-publisher Hubs simply skip the side effect.
+// Returns Hub for chaining.
+func (h *Hub) WithControlPublisher(cp ControlPublisher) *Hub {
+	h.control = cp
+	return h
+}
+
+// now reads from the injected clock (test hook) when set, otherwise wall-clock.
+// The active-token filter (revoked_at IS NULL AND expires_at > now) needs a
+// deterministic clock in tests so a frozen "now" can prove an expired token
+// is correctly skipped.
+func (h *Hub) now() int64 {
+	if h.nowFn != nil {
+		return h.nowFn()
+	}
+	return time.Now().Unix()
 }
 
 // effectiveWebhookSecret returns the secret used to verify webhook signatures.
@@ -248,6 +284,14 @@ func (h *Hub) ingest(ctx context.Context, event string, env github.Envelope) err
 		if env.PullRequest == nil || env.PullRequest.Head.SHA == "" {
 			return nil
 		}
+		// Auth-v2 Phase 3.5: fan out pr_opened / pr_closed to the control
+		// stream keyed on env.Sender.ID (the actor — usually identical to
+		// env.PullRequest.User.ID, but actor wins per the plan's rationale).
+		// h.publishPRControl no-ops when control is nil or the sender has
+		// no live user-bound token.
+		if env.Action == "opened" || env.Action == "closed" {
+			h.publishPRControl(owner, repo, env)
+		}
 		return h.store.RecordRound(owner, repo, env.PullRequest.Number, env.PullRequest.Head.SHA)
 
 	case "pull_request_review":
@@ -347,7 +391,92 @@ func (h *Hub) handleInstallationRepositories(env github.Envelope) error {
 			h.flusher.FlushRepo(installID, r.FullName)
 		}
 	}
+	// Auth-v2 Phase 3.5: notify every user with an active token on this
+	// installation that repos were added — lets the MCP refresh its `/me`
+	// cache without polling. We use env.Action so we only publish on the
+	// "added" payload (GitHub fires the same event shape for both deltas).
+	if env.Action == "added" && len(env.RepositoriesAdded) > 0 {
+		h.publishInstallationAdded(installID, env.Installation.Account.Login)
+	}
 	return nil
+}
+
+// publishPRControl fans `pr_opened` / `pr_closed` out to every live
+// control-stream subscriber of env.Sender.ID. The hub is the source of truth
+// for "which device is the user holding" via active-token rows; the control
+// stream itself only sees subscribers, so the lookup picks the user id once
+// and the hub publish handles the per-device fan-out.
+func (h *Hub) publishPRControl(owner, repo string, env github.Envelope) {
+	if h.control == nil || env.Sender.ID == 0 || env.PullRequest == nil {
+		return
+	}
+	tokens, err := h.store.TokensByGitHubUserID(env.Sender.ID, h.now())
+	if err != nil {
+		log.Printf("phase 3.5 fan-out: tokens by user %d: %v", env.Sender.ID, err)
+		return
+	}
+	if len(tokens) == 0 {
+		return // no live MCP token for this user; nothing to push to
+	}
+	name := "pr_opened"
+	var payload []byte
+	if env.Action == "closed" {
+		name = "pr_closed"
+		payload, err = json.Marshal(map[string]any{
+			"owner": owner, "repo": repo, "number": env.PullRequest.Number,
+		})
+	} else {
+		payload, err = json.Marshal(map[string]any{
+			"owner":        owner,
+			"repo":         repo,
+			"number":       env.PullRequest.Number,
+			"head_sha":     env.PullRequest.Head.SHA,
+			"author_login": env.PullRequest.User.Login,
+		})
+	}
+	if err != nil {
+		log.Printf("phase 3.5 fan-out: marshal %s: %v", name, err)
+		return
+	}
+	// Distinct users; tokens are scoped to the same sender ID by the
+	// SQL filter above, so we only need ONE Publish — the control hub
+	// itself fans across every live subscriber for that user id.
+	h.control.Publish(env.Sender.ID, name, payload)
+}
+
+// publishInstallationAdded fans `installation_added` out to every user with
+// an active token on installID — they may want to refresh /me.
+func (h *Hub) publishInstallationAdded(installID, org string) {
+	if h.control == nil {
+		return
+	}
+	tokens, err := h.store.TokensForInstallation(installID, h.now())
+	if err != nil {
+		log.Printf("phase 3.5 fan-out: tokens for installation %s: %v", installID, err)
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"installation_id": installID,
+		"org":             org,
+	})
+	if err != nil {
+		log.Printf("phase 3.5 fan-out: marshal installation_added: %v", err)
+		return
+	}
+	// De-dup by github_user_id: one user with multiple devices still gets
+	// ONE publish (the control hub itself fans to every device).
+	seen := make(map[int64]struct{}, len(tokens))
+	for _, t := range tokens {
+		if t.GitHubUserID == nil || *t.GitHubUserID == 0 {
+			continue // legacy / install-auto rows have no user binding
+		}
+		uid := *t.GitHubUserID
+		if _, dup := seen[uid]; dup {
+			continue
+		}
+		seen[uid] = struct{}{}
+		h.control.Publish(uid, "installation_added", payload)
+	}
 }
 
 // comment records a comments-type signal for a Round and arms the settle timer.

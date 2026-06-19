@@ -200,7 +200,12 @@ func main() {
 	}
 	repoCache := repoaccess.NewCache(repoChecker, repoaccess.Options{})
 
-	r := server.New(st, sseHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache)
+	// Auth-v2 Phase 3.5 (issue #60): per-user control-stream fan-out hub.
+	// One instance per process — server.New wires the route, hub ingest wires
+	// the publish side via controlPublisherAdapter.
+	controlHub := sse.NewControlHub()
+
+	r := server.New(st, sseHub, controlHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache)
 
 	// Auth v2 Phase 3: 15-min purger sweeps expired auth_sessions rows. The
 	// rows are also rejected on read by the handlers' own expiry checks; the
