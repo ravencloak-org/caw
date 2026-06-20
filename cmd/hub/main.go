@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -59,6 +60,12 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "revoke-token" {
 		if err := revokeToken(st, os.Args[2:]); err != nil {
 			log.Fatalf("revoke-token: %v", err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "migrate-tokens" {
+		if err := migrateTokens(st, os.Args[2:], os.Stdout); err != nil {
+			log.Fatalf("migrate-tokens: %v", err)
 		}
 		return
 	}
@@ -212,7 +219,19 @@ func main() {
 	controlHub := sse.NewControlHub()
 
 	meh := hub.NewMeHandler(st, repoCache, nil)
-	r := server.New(st, sseHub, controlHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache, meh)
+
+	// Auth-v2 Phase 5 cutover. By default RequireRepoAccess rejects legacy
+	// (NULL github_user_id) tokens with a 400 + actionable login URL. The
+	// CAW_ALLOW_LEGACY_TOKENS=1 escape hatch preserves the pre-cutover
+	// bypass for one more release of headroom so operators can run
+	// `hub migrate-tokens` and ask their users to re-login. Read once at
+	// startup so a flip needs a process restart (and shows up in the
+	// startup log line).
+	allowLegacyTokens := os.Getenv("CAW_ALLOW_LEGACY_TOKENS") == "1"
+	if allowLegacyTokens {
+		log.Println("warning: CAW_ALLOW_LEGACY_TOKENS=1 — legacy tokens bypass repo-access checks; remove this for the next release after all watchers re-login")
+	}
+	r := server.New(st, sseHub, controlHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache, meh, allowLegacyTokens)
 
 	// Auth v2 Phase 3: 15-min purger sweeps expired auth_sessions rows. The
 	// rows are also rejected on read by the handlers' own expiry checks; the
@@ -430,5 +449,61 @@ func revokeToken(st *store.Store, args []string) error {
 		return err
 	}
 	fmt.Printf("revoked %s\n", args[0])
+	return nil
+}
+
+// migrateTokens revokes every active legacy (NULL github_user_id) token row
+// — the Auth v2 Phase 5 cutover companion to flipping RequireRepoAccess from
+// "bypass" to "reject". Iterates store.ListLegacyTokens and calls RevokeToken
+// on each row at one shared wall-clock second, so every legacy device's last
+// authenticated request lands at the same instant in the audit log.
+//
+// Output: one human-grep-able line per row, then a "Revoked N legacy tokens"
+// (or "would revoke N" under --dry-run) summary. Idempotent — a freshly
+// revoked row drops out of the next invocation's list. Exit code 0 on
+// success regardless of N; the zero-row case is the normal steady state
+// post-migration.
+//
+// Args: [--dry-run]
+func migrateTokens(st *store.Store, args []string, stdout io.Writer) error {
+	dryRun := false
+	for _, a := range args {
+		switch a {
+		case "--dry-run", "-n":
+			dryRun = true
+		case "-h", "--help":
+			if _, err := fmt.Fprintln(stdout, "usage: hub migrate-tokens [--dry-run]"); err != nil {
+				return fmt.Errorf("write help: %w", err)
+			}
+			return nil
+		default:
+			return fmt.Errorf("usage: hub migrate-tokens [--dry-run]: unknown arg %q", a)
+		}
+	}
+
+	now := time.Now().Unix()
+	rows, err := st.ListLegacyTokens(now)
+	if err != nil {
+		return fmt.Errorf("list legacy tokens: %w", err)
+	}
+
+	verb := "Revoked"
+	if dryRun {
+		verb = "Would revoke"
+	}
+	for _, t := range rows {
+		if !dryRun {
+			if err := st.RevokeToken(t.ID, now); err != nil {
+				return fmt.Errorf("revoke %s: %w", t.ID, err)
+			}
+		}
+		if _, err := fmt.Fprintf(stdout, "  token_id=%s installation_id=%s org=%s device_label=%s\n",
+			t.ID, t.InstallationID, t.Org, t.DeviceLabel); err != nil {
+			return fmt.Errorf("write row: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(stdout, "%s %d legacy tokens\n", verb, len(rows)); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
 	return nil
 }

@@ -9,7 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- feat(auth-v2): phase 2 — per-user authorization middleware + repo-access cache. Adds `internal/repoaccess` (5-min positive / 60-s negative TTL, 30-min stale-allow grace, single-flight collapse) and `internal/hub/repo_access_middleware.go`. Wired after `RequireRepoScope` on `/sse/...` and `/leases/...`. Legacy tokens (NULL `github_user_id`) bypass with `Deprecation: legacy-token`; enforcement begins in Phase 5. Webhook flush hooks on `installation.deleted` and `installation_repositories.removed`.
+- **feat(auth-v2): user-bound installation tokens + MCP-initiated login**
+  (issues [#56-#62], PRs [#64-#70] + this PR). Replaces the v0.1.x
+  "operator mints, user pastes" token flow with per-user, per-device,
+  per-installation tokens issued through a hub-driven OAuth handshake the
+  MCP plugin invokes. Highlights:
+  - Schema (Phase 1): `tokens.{id, github_user_id, github_user_login,
+    device_label, expires_at, last_used_at, revoked_at}` columns +
+    `auth_sessions` table + `installations.app_slug`. Online additive
+    migration — no downtime.
+  - Per-user authorization (Phase 2): `internal/repoaccess` cache
+    (5-min positive / 60-s negative TTL, 30-min stale-allow grace,
+    single-flight collapse) + `RequireRepoAccess` middleware on
+    `/sse/...` and `/leases/...`. Webhook-driven flush on
+    `installation.deleted` and `installation_repositories.removed`.
+  - MCP-initiated login (Phase 3): `/auth/*` routes (loopback + device
+    handshakes, PKCE-bound) + `login` / `logout` / `auth_status` tools on
+    `caw-watcher`. Token file at `~/.config/caw/credentials.json` (mode
+    `0600`).
+  - Auto-subscribe (Phase 3.5): per-user control stream at
+    `/sse/me/control`; `pull_request.opened` webhooks fan out to the user
+    who opened the PR so the MCP transparently subscribes without a
+    `subscribe_pr` call.
+  - Token management (Phase 4): `/me`, `/me/tokens`, `DELETE
+    /me/tokens/:id`, `/me/recover` — list and revoke per-device. MCP
+    `logout` revokes the current device's token; `installation.deleted`
+    revokes every token bound to that installation.
+  - **Cutover (Phase 5, BREAKING):** `RequireRepoAccess` now rejects
+    legacy (NULL `github_user_id`) tokens with `400 user-bound token
+    required; run \`login\` from your agent`. Operators set
+    `CAW_ALLOW_LEGACY_TOKENS=1` to preserve the bypass for one more
+    release of headroom. New `hub migrate-tokens` subcommand (with
+    `--dry-run`) revokes every active legacy row idempotently. Install
+    docs (`docs/install/CLAUDE.md` / `CURSOR.md` / `CODEX-CLI.md`)
+    rewritten to point at the `login` tool; new `docs/install/MCP-LOGIN.md`
+    covers the end-user flow; `docs/install/SELF-HOST.md` extended with
+    the operator runbook. ADR-0011 captures the design;
+    [ADR-0003](./docs/adr/0003-sse-auth-via-hub-minted-installation-token.md)'s
+    "no per-user isolation within an installation" clause is superseded.
+
+### Breaking
+
+- Legacy tokens minted via `hub mint-token` before Auth v2 are now rejected
+  on `/sse/...` and `/leases/...`. Set `CAW_ALLOW_LEGACY_TOKENS=1` for one
+  release of headroom, run `hub migrate-tokens` to revoke them, and have
+  developers re-login via the `login` MCP tool.
 
 ## [v0.1.4]
 

@@ -816,6 +816,76 @@ func (s *Store) TokensForInstallation(installID string, now int64) ([]Token, err
 	return out, nil
 }
 
+// ListLegacyTokens returns every ACTIVE legacy (NULL github_user_id) token
+// row. "Active" means not revoked and not past its expires_at — every column
+// the hot-path VerifyToken filter checks. Auth-v2 Phase 5's `hub
+// migrate-tokens` operator subcommand iterates this list to revoke each row,
+// closing the legacy tail before turning the middleware reject to a hard
+// 400. Idempotent across calls: a freshly-revoked row drops out of the next
+// invocation's result set.
+//
+// now is the caller's Unix-seconds clock so tests can pin an exact moment.
+// Returns an empty slice when no active legacy rows remain (the steady state
+// post-migration).
+func (s *Store) ListLegacyTokens(now int64) ([]Token, error) {
+	rows, err := s.db.Query(
+		`SELECT rowid, token_hash, installation_id, org, created_at,
+		        id, github_user_id, github_user_login, device_label,
+		        expires_at, last_used_at, revoked_at
+		 FROM tokens
+		 WHERE github_user_id IS NULL
+		   AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > ?)
+		 ORDER BY created_at ASC, rowid ASC`,
+		now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list legacy tokens: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Token
+	for rows.Next() {
+		var t Token
+		var rowid int64
+		var id, gul, dl sql.NullString
+		var guid, exp, lu, rev sql.NullInt64
+		if err := rows.Scan(
+			&rowid, &t.Hash, &t.InstallationID, &t.Org, &t.CreatedAt,
+			&id, &guid, &gul, &dl, &exp, &lu, &rev,
+		); err != nil {
+			return nil, fmt.Errorf("list legacy tokens scan: %w", err)
+		}
+		t.ID = id.String
+		if t.ID == "" {
+			t.ID = fmt.Sprintf("legacy-%d", rowid)
+		}
+		t.DeviceLabel = dl.String
+		if guid.Valid {
+			v := guid.Int64
+			t.GitHubUserID = &v
+		}
+		t.GitHubUserLogin = gul.String
+		if exp.Valid {
+			v := exp.Int64
+			t.ExpiresAt = &v
+		}
+		if lu.Valid {
+			v := lu.Int64
+			t.LastUsedAt = &v
+		}
+		if rev.Valid {
+			v := rev.Int64
+			t.RevokedAt = &v
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list legacy tokens iterate: %w", err)
+	}
+	return out, nil
+}
+
 // nullableInt converts a *int64 to a database value: nil pointer → SQL NULL,
 // non-nil → its dereferenced value.
 func nullableInt(p *int64) any {
