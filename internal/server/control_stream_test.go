@@ -54,7 +54,7 @@ func newControlServer(t *testing.T) (*http.Client, string, string, string) {
 	engine := settle.New(st, sseHub, time.Second)
 	cache := repoaccess.NewCache(nil, repoaccess.Options{})
 
-	r := server.New(st, sseHub, controlHub, engine, []byte("itest"), nil, nil, nil, nil, cache)
+	r := server.New(st, sseHub, controlHub, engine, []byte("itest"), nil, nil, nil, nil, cache, nil)
 	srvURL := startTestServer(t, r)
 
 	c := &http.Client{Timeout: 5 * time.Second}

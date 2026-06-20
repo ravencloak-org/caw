@@ -162,6 +162,72 @@ func TestHandleInstallation_Deleted(t *testing.T) {
 	}
 }
 
+// TestHandleInstallation_DeletedRevokesTokens covers Auth v2 Phase 4's
+// webhook-driven revocation: a deleted installation kills every still-active
+// token bound to it, plus any cached repo-access decisions.
+func TestHandleInstallation_DeletedRevokesTokens(t *testing.T) {
+	st := openTestStore(t)
+	h := New(st, nil, nil)
+
+	const id int64 = 77
+	idStr := strconv.FormatInt(id, 10)
+	uid := int64(42)
+
+	envCreate := installEnvelope("created", id, "org77", repos("org77/repo"))
+	if err := h.handleInstallation(envCreate); err != nil {
+		t.Fatalf("handleInstallation created: %v", err)
+	}
+	// Seed three tokens bound to this installation (one of them already
+	// revoked, so we can confirm the handler doesn't blindly overwrite the
+	// original revoke timestamp).
+	preRev := int64(1_600_000_000)
+	rows := []store.Token{
+		{ID: "A0000000000000000000000001", Hash: "h-a", InstallationID: idStr, Org: "org77", GitHubUserID: &uid, DeviceLabel: "dev", CreatedAt: 1_700_000_000},
+		{ID: "A0000000000000000000000002", Hash: "h-b", InstallationID: idStr, Org: "org77", GitHubUserID: &uid, DeviceLabel: "dev", CreatedAt: 1_700_000_001},
+		{ID: "A0000000000000000000000003", Hash: "h-c", InstallationID: idStr, Org: "org77", GitHubUserID: &uid, DeviceLabel: "dev", CreatedAt: 1_700_000_002, RevokedAt: &preRev},
+	}
+	// One token bound to a different installation must NOT be revoked.
+	other := store.Token{
+		ID: "B0000000000000000000000001", Hash: "h-other", InstallationID: "999",
+		Org: "elsewhere", GitHubUserID: &uid, DeviceLabel: "dev", CreatedAt: 1_700_000_003,
+	}
+	for _, r := range rows {
+		if err := st.InsertTokenRow(r); err != nil {
+			t.Fatalf("InsertTokenRow %s: %v", r.Hash, err)
+		}
+	}
+	if err := st.InsertTokenRow(other); err != nil {
+		t.Fatalf("InsertTokenRow other: %v", err)
+	}
+
+	envDelete := installEnvelope("deleted", id, "org77", nil)
+	if err := h.handleInstallation(envDelete); err != nil {
+		t.Fatalf("handleInstallation deleted: %v", err)
+	}
+
+	// Every active row of installation 77 is now revoked.
+	for _, id := range []string{"A0000000000000000000000001", "A0000000000000000000000002"} {
+		got, ok, err := st.GetTokenByID(id)
+		if err != nil || !ok {
+			t.Fatalf("GetTokenByID %s: ok=%v err=%v", id, ok, err)
+		}
+		if got.RevokedAt == nil {
+			t.Errorf("row %s: revoked_at still nil after installation delete", id)
+		}
+	}
+	// Pre-revoked row keeps its original timestamp (the UPDATE only fires
+	// when revoked_at IS NULL; the audit-of-record is the first revoke).
+	got, _, _ := st.GetTokenByID("A0000000000000000000000003")
+	if got.RevokedAt == nil || *got.RevokedAt != preRev {
+		t.Errorf("pre-revoked row revoked_at = %v, want preserved %d", got.RevokedAt, preRev)
+	}
+	// Other installation untouched.
+	got, _, _ = st.GetTokenByID("B0000000000000000000000001")
+	if got.RevokedAt != nil {
+		t.Errorf("other-installation token revoked: %v", got.RevokedAt)
+	}
+}
+
 // TestHandleInstallation_NilInstallation checks that a nil Installation is a no-op.
 func TestHandleInstallation_NilInstallation(t *testing.T) {
 	st := openTestStore(t)

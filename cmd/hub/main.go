@@ -56,6 +56,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "revoke-token" {
+		if err := revokeToken(st, os.Args[2:]); err != nil {
+			log.Fatalf("revoke-token: %v", err)
+		}
+		return
+	}
 
 	if cfg.GitHubWebhookSecret == "" {
 		log.Println("warning: CAW_GH_WEBHOOK_SECRET is empty; all webhooks will be rejected")
@@ -205,7 +211,8 @@ func main() {
 	// the publish side via controlPublisherAdapter.
 	controlHub := sse.NewControlHub()
 
-	r := server.New(st, sseHub, controlHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache)
+	meh := hub.NewMeHandler(st, repoCache, nil)
+	r := server.New(st, sseHub, controlHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache, meh)
 
 	// Auth v2 Phase 3: 15-min purger sweeps expired auth_sessions rows. The
 	// rows are also rejected on read by the handlers' own expiry checks; the
@@ -408,5 +415,20 @@ func mintToken(st *store.Store, args []string) error {
 		return err
 	}
 	fmt.Println(raw)
+	return nil
+}
+
+// revokeToken is the operator break-glass counterpart to mintToken: revoke a
+// single token by id. Idempotent — re-revoking an already-revoked id is a
+// silent success. Print "revoked <id>" so a wrapping shell pipeline can grep
+// for confirmation. Args: <token_id>.
+func revokeToken(st *store.Store, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: hub revoke-token <token_id>")
+	}
+	if err := st.RevokeToken(args[0], time.Now().Unix()); err != nil {
+		return err
+	}
+	fmt.Printf("revoked %s\n", args[0])
 	return nil
 }

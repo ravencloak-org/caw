@@ -340,6 +340,44 @@ func TestCache_FlushInstallationDropsAllEntries(t *testing.T) {
 	}
 }
 
+// TestCache_FlushUserDropsOnlyThatUser: a flush of one user wipes every
+// (installation, repo) cached under that user, leaves sibling users intact,
+// and does not match a prefix-of user id (4 must not flush 42).
+func TestCache_FlushUserDropsOnlyThatUser(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	fc := &fakeChecker{allow: true}
+	c := newTestCache(t, fc, &now)
+
+	// Seed: user 4 (one entry), user 42 (two entries across two installs).
+	_, _, _ = c.Lookup(context.Background(), "inst-A", 4, "u4", "o", "r1")
+	_, _, _ = c.Lookup(context.Background(), "inst-A", 42, "u42", "o", "r1")
+	_, _, _ = c.Lookup(context.Background(), "inst-B", 42, "u42", "o", "r2")
+	if c.Len() != 3 {
+		t.Fatalf("seed: Len()=%d want 3", c.Len())
+	}
+
+	c.FlushUser(42)
+	if c.Len() != 1 {
+		t.Errorf("post-flush Len()=%d want 1 (user 4 survives)", c.Len())
+	}
+
+	// User 4's entry must remain a hit (not re-fetched).
+	if _, src, _ := c.Lookup(context.Background(), "inst-A", 4, "u4", "o", "r1"); src != SourceHit {
+		t.Errorf("user 4 post-flush src = %q, want %q", src, SourceHit)
+	}
+	// User 42 must be re-fetched on next lookup.
+	if _, src, _ := c.Lookup(context.Background(), "inst-A", 42, "u42", "o", "r1"); src != SourceMissAllow {
+		t.Errorf("user 42 post-flush src = %q, want %q", src, SourceMissAllow)
+	}
+
+	// userID 0 is a defensive no-op.
+	before := c.Len()
+	c.FlushUser(0)
+	if c.Len() != before {
+		t.Errorf("FlushUser(0) changed Len() %d -> %d", before, c.Len())
+	}
+}
+
 // TestCache_SingleFlightCollapsesConcurrentMisses: N concurrent Lookups on
 // a cold key should fire exactly one HasReadAccess call.
 func TestCache_SingleFlightCollapsesConcurrentMisses(t *testing.T) {

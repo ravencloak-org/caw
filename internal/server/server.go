@@ -31,6 +31,8 @@ import (
 // uses the bearer auth (no per-repo path params; per-user filtering arrives
 // with Phase 4's /me/* surface). Tests that exercise only legacy tokens may
 // pass repoaccess.NewCache(nil, …) and never reach the cache's checker seam.
+// meh is optional: when non-nil the Auth v2 Phase 4 /me/* routes are
+// registered (per-user token management — list, revoke, panic-recover).
 func New(
 	st *store.Store,
 	sseHub *sse.Hub,
@@ -42,6 +44,7 @@ func New(
 	ash *hub.AuthSessionHandler,
 	mintFn hub.MintFunc,
 	repoAccess *repoaccess.Cache,
+	meh *hub.MeHandler,
 ) *gin.Engine {
 	r := gin.New()
 	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
@@ -92,6 +95,18 @@ func New(
 	authMW := auth.Required(st)
 	scopeMW := hub.RequireRepoScope(st)
 	accessMW := hub.RequireRepoAccess(repoAccess)
+
+	// Auth v2 Phase 4 /me/* surface (issue #61). All four routes are
+	// auth-required only — they are per-user, not per-repo, so no
+	// RequireRepoScope / RequireRepoAccess in the chain. Legacy tokens
+	// (NULL github_user_id) are rejected by the handler itself.
+	if meh != nil {
+		r.GET("/me", authMW, meh.HandleMe)
+		r.GET("/me/tokens", authMW, meh.HandleMeTokens)
+		r.DELETE("/me/tokens/:id", authMW, meh.HandleMeTokenRevoke)
+		r.POST("/me/recover", authMW, meh.HandleMeRecover)
+	}
+
 	r.GET("/pending", authMW, h.HandlePending)
 	r.GET("/sse/:owner/:repo/:number", authMW, scopeMW, accessMW, sseHub.Handler(sseKey))
 	r.POST("/leases/:owner/:repo/:number", authMW, scopeMW, accessMW, h.HandleAcquireLease)

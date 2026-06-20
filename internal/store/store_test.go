@@ -641,3 +641,171 @@ func TestInstallationForRepoStoreError(t *testing.T) {
 		t.Fatal("expected error querying a closed store")
 	}
 }
+
+// TestGetTokenByID round-trips a token row through GetTokenByID and verifies
+// it returns rows regardless of revoked / expired state — Phase 4's /me/tokens
+// surface needs to surface revoked rows for audit and answer DELETE
+// idempotently for already-revoked ids.
+func TestGetTokenByID(t *testing.T) {
+	s := newTestStore(t)
+	uid := int64(7)
+	id := "01HX0000000000000000000077"
+	if err := s.InsertTokenRow(Token{
+		ID:              id,
+		Hash:            "h-7",
+		InstallationID:  "inst-1",
+		Org:             "ravencloak-org",
+		GitHubUserID:    &uid,
+		GitHubUserLogin: "octocat",
+		DeviceLabel:     "Claude Code @ jobin-mbp",
+		CreatedAt:       1_700_000_000,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow: %v", err)
+	}
+
+	got, ok, err := s.GetTokenByID(id)
+	if err != nil || !ok {
+		t.Fatalf("GetTokenByID: (ok=%v, err=%v)", ok, err)
+	}
+	if got.Hash != "h-7" {
+		t.Errorf("Hash = %q, want h-7", got.Hash)
+	}
+	if got.GitHubUserID == nil || *got.GitHubUserID != uid {
+		t.Errorf("GitHubUserID = %v, want %d", got.GitHubUserID, uid)
+	}
+	if got.RevokedAt != nil {
+		t.Errorf("RevokedAt = %v, want nil", got.RevokedAt)
+	}
+
+	// Revoking the row must still let GetTokenByID surface it (audit /
+	// idempotent DELETE require post-revoke visibility).
+	if err := s.RevokeToken(id, 1_700_000_500); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+	got, ok, err = s.GetTokenByID(id)
+	if err != nil || !ok {
+		t.Fatalf("GetTokenByID after revoke: (ok=%v, err=%v)", ok, err)
+	}
+	if got.RevokedAt == nil || *got.RevokedAt != 1_700_000_500 {
+		t.Errorf("RevokedAt = %v, want 1700000500", got.RevokedAt)
+	}
+
+	// Unknown id is a clean miss.
+	if _, ok, err := s.GetTokenByID("nope"); err != nil || ok {
+		t.Errorf("unknown id: ok=%v err=%v, want false/nil", ok, err)
+	}
+	// Empty id short-circuits without touching the DB.
+	if _, ok, err := s.GetTokenByID(""); err != nil || ok {
+		t.Errorf("empty id: ok=%v err=%v, want false/nil", ok, err)
+	}
+}
+
+// TestRevokeAllTokensForUser asserts the panic-button semantics: every still-
+// active token for the user goes to revoked_at=now in one shot; already-
+// revoked rows are not re-touched; another user's rows are untouched; counts
+// are reported accurately.
+func TestRevokeAllTokensForUser(t *testing.T) {
+	s := newTestStore(t)
+	uid := int64(42)
+	other := int64(99)
+
+	rows := []Token{
+		{ID: "A0000000000000000000000001", Hash: "ha1", InstallationID: "inst-1", GitHubUserID: &uid, DeviceLabel: "dev"},
+		{ID: "A0000000000000000000000002", Hash: "ha2", InstallationID: "inst-2", GitHubUserID: &uid, DeviceLabel: "dev"},
+		{ID: "B0000000000000000000000001", Hash: "hb1", InstallationID: "inst-1", GitHubUserID: &other, DeviceLabel: "dev"},
+	}
+	for _, r := range rows {
+		if err := s.InsertTokenRow(r); err != nil {
+			t.Fatalf("InsertTokenRow %s: %v", r.Hash, err)
+		}
+	}
+	// Pre-revoke one of uid's rows so the second call doesn't re-touch it.
+	preRevokedAt := int64(1_700_000_000)
+	if err := s.RevokeToken("A0000000000000000000000002", preRevokedAt); err != nil {
+		t.Fatalf("RevokeToken pre: %v", err)
+	}
+
+	n, err := s.RevokeAllTokensForUser(uid, 1_700_000_500)
+	if err != nil {
+		t.Fatalf("RevokeAllTokensForUser: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("revoked count = %d, want 1 (one still-active row)", n)
+	}
+
+	// All of uid's rows are now revoked; other user's row is not.
+	got, _, _ := s.GetTokenByID("A0000000000000000000000001")
+	if got.RevokedAt == nil || *got.RevokedAt != 1_700_000_500 {
+		t.Errorf("A1 revoked_at = %v, want 1700000500", got.RevokedAt)
+	}
+	got, _, _ = s.GetTokenByID("A0000000000000000000000002")
+	if got.RevokedAt == nil || *got.RevokedAt != preRevokedAt {
+		t.Errorf("A2 revoked_at = %v, want preserved %d", got.RevokedAt, preRevokedAt)
+	}
+	got, _, _ = s.GetTokenByID("B0000000000000000000000001")
+	if got.RevokedAt != nil {
+		t.Errorf("other user B1 revoked_at = %v, want nil (untouched)", got.RevokedAt)
+	}
+
+	// Second call is idempotent: zero rows still active.
+	n, err = s.RevokeAllTokensForUser(uid, 1_700_000_600)
+	if err != nil {
+		t.Fatalf("RevokeAllTokensForUser idempotent: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("idempotent count = %d, want 0", n)
+	}
+
+	// userID=0 is the legacy sentinel and never matches; defensive no-op.
+	if n, err := s.RevokeAllTokensForUser(0, 1_700_000_700); err != nil || n != 0 {
+		t.Errorf("userID=0: n=%d err=%v, want 0/nil", n, err)
+	}
+}
+
+// TestRevokeTokensForInstallation is the webhook-driven counterpart: the
+// installation.deleted handler calls this to kill every token bound to a
+// torn-down installation. Cross-installation rows are not touched.
+func TestRevokeTokensForInstallation(t *testing.T) {
+	s := newTestStore(t)
+	uid := int64(1)
+	rows := []Token{
+		{ID: "A0000000000000000000000010", Hash: "h-a", InstallationID: "inst-A", GitHubUserID: &uid, DeviceLabel: "dev"},
+		{ID: "A0000000000000000000000011", Hash: "h-b", InstallationID: "inst-A", GitHubUserID: &uid, DeviceLabel: "dev"},
+		{ID: "B0000000000000000000000010", Hash: "h-c", InstallationID: "inst-B", GitHubUserID: &uid, DeviceLabel: "dev"},
+	}
+	for _, r := range rows {
+		if err := s.InsertTokenRow(r); err != nil {
+			t.Fatalf("InsertTokenRow %s: %v", r.Hash, err)
+		}
+	}
+
+	n, err := s.RevokeTokensForInstallation("inst-A", 1_700_000_500)
+	if err != nil {
+		t.Fatalf("RevokeTokensForInstallation: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("revoked count = %d, want 2", n)
+	}
+	for _, id := range []string{"A0000000000000000000000010", "A0000000000000000000000011"} {
+		got, _, _ := s.GetTokenByID(id)
+		if got.RevokedAt == nil {
+			t.Errorf("%s: revoked_at still nil", id)
+		}
+	}
+	// Other installation untouched.
+	got, _, _ := s.GetTokenByID("B0000000000000000000000010")
+	if got.RevokedAt != nil {
+		t.Errorf("inst-B row revoked unexpectedly: %v", got.RevokedAt)
+	}
+
+	// Idempotent: already-revoked rows are not re-touched.
+	n, err = s.RevokeTokensForInstallation("inst-A", 1_700_000_600)
+	if err != nil || n != 0 {
+		t.Errorf("idempotent: n=%d err=%v, want 0/nil", n, err)
+	}
+
+	// Empty installation id is a defensive no-op.
+	if n, err := s.RevokeTokensForInstallation("", 1_700_000_700); err != nil || n != 0 {
+		t.Errorf("empty installation: n=%d err=%v, want 0/nil", n, err)
+	}
+}

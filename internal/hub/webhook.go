@@ -358,6 +358,18 @@ func (h *Hub) handleInstallation(env github.Envelope) error {
 		if err := h.store.DeleteInstallation(installID); err != nil {
 			return fmt.Errorf("handleInstallation delete: %w", err)
 		}
+		// Auth v2 Phase 4 — defense in depth. Phase 2's cache flush below
+		// drops in-memory allow decisions, but the tokens themselves must
+		// also die at the persistence layer so a token can never re-allow
+		// against a freshly re-installed App that happens to land on the
+		// same installation_id later (vanishingly unlikely, but cheap to
+		// foreclose). RevokeTokensForInstallation is idempotent; an error
+		// is logged but not fatal — the webhook must still ack to GitHub.
+		if n, err := h.store.RevokeTokensForInstallation(installID, time.Now().Unix()); err != nil {
+			log.Printf("revoke tokens for deleted installation %s: %v", installID, err)
+		} else if n > 0 {
+			log.Printf("installation %s deleted: revoked %d token(s)", installID, n)
+		}
 		// Auth v2: drop every cached repo-access decision for this
 		// installation. The installation is gone — no token under it
 		// should still see an "allow" the cache might still hold.

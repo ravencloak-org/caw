@@ -275,6 +275,28 @@ func (c *Cache) FlushRepo(installationID, fullName string) {
 	}
 }
 
+// FlushUser drops every cache entry for userID across every installation and
+// every repo. Called from Phase 4's POST /me/recover (panic button) so a
+// stolen-and-revoked user has no in-memory allow surviving the persistence
+// revoke. userID == 0 is a defensive no-op (the legacy-token sentinel never
+// reaches the cache).
+func (c *Cache) FlushUser(userID int64) {
+	if userID == 0 {
+		return
+	}
+	// Key layout: "<instID>/<userID>/<owner>/<repo>". The userID segment
+	// is delimited by '/' on both sides; we scan with a /uid/ middle match
+	// to avoid mistaking a prefix-of (e.g. user 4 matching keys for user 42).
+	mid := fmt.Sprintf("/%d/", userID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k := range c.entries {
+		if strings.Contains(k, mid) {
+			delete(c.entries, k)
+		}
+	}
+}
+
 // Len reports the current cached entry count. Useful for tests and metrics.
 func (c *Cache) Len() int {
 	c.mu.Lock()
