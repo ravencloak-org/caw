@@ -217,6 +217,92 @@ link from step 3 and watch a token land in their agent.
 
 ---
 
+## 6. First end-user login (post-Auth-v2 cutover)
+
+With Phase 5 shipped, end-users no longer paste tokens. The flow on a fresh
+self-host, from the operator running `docker compose up` through to a
+developer's first `subscribe_pr`, is:
+
+```sh
+# Operator side — one-shot, then leave the hub running.
+git clone https://github.com/ravencloak-org/caw.git
+cd caw
+export CAW_BASE_URL=https://caw.example.com
+export CAW_BOOTSTRAP_TOKEN=$(openssl rand -hex 32)
+docker compose up -d
+make hooks                                  # set core.hooksPath = .githooks
+# Browser-only manifest registration; bootstrap token never leaves the
+# terminal. The hub auto-persists App credentials.
+open "https://caw.example.com/github/app/manifest?token=$CAW_BOOTSTRAP_TOKEN"
+# Confirm the App settings page has these toggles flipped (the manifest
+# pre-flips them, but check after re-registration):
+#   ✓ Active webhook
+#   ✓ Request user authorization (OAuth) during installation
+#   Setup URL = https://caw.example.com/github/app/install/callback
+```
+
+```sh
+# Developer side — install caw-watcher per docs/install/{CLAUDE,CURSOR,CODEX-CLI}.md
+# then in the agent:
+login()
+# Browser opens to https://caw.example.com/auth/u/<sid>. Authorize the App,
+# pick installation(s). The hub mints user-bound tokens and delivers them
+# to ~/.config/caw/credentials.json over a one-shot loopback POST.
+
+# Verify isolation: a co-worker who is a collaborator on `private-thing` but
+# NOT on `secret-thing` (both in the same installation) gets:
+subscribe_pr("ravencloak-org", "private-thing", 1)   # 200 + SSE
+subscribe_pr("ravencloak-org", "secret-thing",  1)   # 404
+```
+
+### Operator break-glass commands
+
+```sh
+# Revoke a single token by id (Phase 4):
+docker compose exec hub /hub revoke-token <token_id>
+
+# Cutover migration (Phase 5): revoke every active legacy (NULL
+# github_user_id) token row. Idempotent — re-running on a clean DB prints
+# "Revoked 0 legacy tokens".
+docker compose exec hub /hub migrate-tokens --dry-run   # preview first
+docker compose exec hub /hub migrate-tokens             # then commit
+
+# Last-resort: extend the migration window by one more release. With this
+# env set, RequireRepoAccess still bypasses legacy tokens with a
+# `Deprecation: legacy-token` header. Remove it once all watchers re-login.
+docker compose run -e CAW_ALLOW_LEGACY_TOKENS=1 -d hub
+```
+
+## 7. Breaking change — Auth v2 Phase 5 cutover
+
+Phase 5 flips `RequireRepoAccess` from "bypass legacy tokens with a
+`Deprecation` header" to "reject legacy tokens with `400 user-bound token
+required; run \`login\` from your agent`" on `/sse/...` and `/leases/...`.
+
+Any v0.1.x watcher still presenting a `hub mint-token`-issued token will
+start failing on its next subscribe. The migration window is gated by the
+`CAW_ALLOW_LEGACY_TOKENS=1` env flag:
+
+1. **Before deploying the cutover release:** set `CAW_ALLOW_LEGACY_TOKENS=1`
+   on the hub. Watchers continue to work; the hub logs every legacy hit so
+   you can quantify the migration tail.
+2. **Run the migration:** `docker compose exec hub /hub migrate-tokens
+   --dry-run` to preview, then drop `--dry-run` to revoke. Each affected
+   token's `installation_id` + `org` is printed for audit.
+3. **Tell your developers to re-login:** they invoke the `login` MCP tool
+   from inside their agent (see `MCP-LOGIN.md`). It works one device at a
+   time; old devices keep their (now revoked) credentials but get the same
+   400 directing them to log in.
+4. **Unset `CAW_ALLOW_LEGACY_TOKENS`** once the legacy tail is gone. The
+   hub starts rejecting any remaining legacy tokens with the same 400 the
+   middleware uses for every other un-bound token.
+
+The schema additions from Phase 1 (the nullable user / device / expiry
+columns on `tokens`) stay backward-compatible — rollback is just unsetting
+`CAW_ALLOW_LEGACY_TOKENS` (or rolling the hub image back one tag).
+
+---
+
 ## See also
 
 - [ADR-0003](../adr/0003-sse-auth-via-hub-minted-installation-token.md) — token shape and per-installation auth model.

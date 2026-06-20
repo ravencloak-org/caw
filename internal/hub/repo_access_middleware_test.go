@@ -37,8 +37,17 @@ func (s *stubChecker) HasReadAccess(_ context.Context, _, userLogin, _, _ string
 
 // rapHarness wires a minimal gin engine: injectCtx populates the auth context
 // keys the way auth.Required does, then RequireRepoAccess runs against the
-// supplied cache, then a sentinel handler reports "ok".
+// supplied cache, then a sentinel handler reports "ok". Uses the Phase 5
+// default (AllowLegacyTokens=false). Tests exercising the operator escape
+// hatch use rapHarnessWithOpts directly.
 func rapHarness(t *testing.T, cache *repoaccess.Cache, userID int64, login string) *gin.Engine {
+	return rapHarnessWithOpts(t, cache, userID, login, RequireRepoAccessOptions{})
+}
+
+// rapHarnessWithOpts is rapHarness with an explicit Options struct, used by
+// the Phase 5 cutover tests to verify both default-reject and escape-hatch
+// behavior on the same plumbing.
+func rapHarnessWithOpts(t *testing.T, cache *repoaccess.Cache, userID int64, login string, opts RequireRepoAccessOptions) *gin.Engine {
 	t.Helper()
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -48,7 +57,7 @@ func rapHarness(t *testing.T, cache *repoaccess.Cache, userID int64, login strin
 		c.Set(auth.ContextGitHubUserLogin, login)
 		c.Next()
 	})
-	r.GET("/sse/:owner/:repo/:number", RequireRepoAccess(cache), func(c *gin.Context) {
+	r.GET("/sse/:owner/:repo/:number", RequireRepoAccess(cache, opts), func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
 	return r
@@ -58,10 +67,10 @@ func newFakeClock(now *time.Time) func() time.Time {
 	return func() time.Time { return *now }
 }
 
-// TestRequireRepoAccess_LegacyTokenBypassesWithDeprecationHeader: a userID of
-// 0 is the legacy sentinel; the middleware bypasses the cache and stamps a
-// Deprecation: legacy-token header.
-func TestRequireRepoAccess_LegacyTokenBypassesWithDeprecationHeader(t *testing.T) {
+// TestRequireRepoAccess_LegacyTokenRejectedWith400: Phase 5 cutover — a
+// userID of 0 (legacy sentinel) is rejected with 400 + JSON actionable body
+// pointing the MCP at the login flow. No GitHub call, no Deprecation header.
+func TestRequireRepoAccess_LegacyTokenRejectedWith400(t *testing.T) {
 	sc := &stubChecker{} // must not be called
 	cache := repoaccess.NewCache(sc, repoaccess.Options{})
 	r := rapHarness(t, cache, 0, "")
@@ -70,8 +79,43 @@ func TestRequireRepoAccess_LegacyTokenBypassesWithDeprecationHeader(t *testing.T
 	req, _ := http.NewRequest(http.MethodGet, "/sse/octocorp/widgets/1", nil)
 	r.ServeHTTP(w, req)
 
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	if got := w.Header().Get("Deprecation"); got != "" {
+		t.Errorf("Deprecation = %q on reject path, want empty", got)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"user-bound token required",
+		"login",
+		"/auth/start",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q: %s", want, body)
+		}
+	}
+	if sc.calls != 0 {
+		t.Errorf("checker called %d times for rejected legacy, want 0", sc.calls)
+	}
+}
+
+// TestRequireRepoAccess_LegacyTokenAllowedByOperatorEscapeHatch: the
+// CAW_ALLOW_LEGACY_TOKENS=1 escape hatch (AllowLegacyTokens=true) restores
+// the Phase 2 bypass behavior — 200 + Deprecation: legacy-token, no
+// checker call. One more release of migration headroom; documented as
+// temporary.
+func TestRequireRepoAccess_LegacyTokenAllowedByOperatorEscapeHatch(t *testing.T) {
+	sc := &stubChecker{} // must not be called even with the escape hatch on
+	cache := repoaccess.NewCache(sc, repoaccess.Options{})
+	r := rapHarnessWithOpts(t, cache, 0, "", RequireRepoAccessOptions{AllowLegacyTokens: true})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/sse/octocorp/widgets/1", nil)
+	r.ServeHTTP(w, req)
+
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		t.Fatalf("status = %d, want %d (escape hatch on)", w.Code, http.StatusOK)
 	}
 	if got := w.Header().Get("Deprecation"); got != "legacy-token" {
 		t.Errorf("Deprecation = %q, want %q", got, "legacy-token")
@@ -246,7 +290,7 @@ func TestRequireRepoAccess_NilCachePanics(t *testing.T) {
 			t.Fatal("expected panic on nil cache")
 		}
 	}()
-	_ = RequireRepoAccess(nil)
+	_ = RequireRepoAccess(nil, RequireRepoAccessOptions{})
 }
 
 // TestRequireRepoAccess_404BodyExposesGenericMessage: the body MUST NOT

@@ -1,8 +1,10 @@
 # Install caw-watcher for Cursor
 
-## 1. Download
+Auth v2 makes this almost stateless — install the binary, point at the hub,
+and let the `login` MCP tool fetch your token over a browser-driven OAuth
+handshake. No copy/paste, no env-var token to rotate.
 
-Grab the right `caw-watcher` build for your machine, extract it, and drop it on `PATH`.
+## 1. Download
 
 ```sh
 # macOS arm64 (Apple Silicon)
@@ -28,7 +30,10 @@ https://github.com/ravencloak-org/caw/releases/latest/download/caw-watcher-<OS>-
 
 ## 2. Configure Cursor
 
-Cursor uses the same MCP config schema as Claude Desktop. Edit (or create) `~/.cursor/mcp.json` and add the `caw` MCP server:
+Cursor uses the same MCP config schema as Claude Desktop. Edit (or create)
+`~/.cursor/mcp.json` and add the `caw` MCP server. **No token env var** —
+`caw-watcher` discovers the token from `~/.config/caw/credentials.json` after
+step 3:
 
 ```json
 {
@@ -36,8 +41,7 @@ Cursor uses the same MCP config schema as Claude Desktop. Edit (or create) `~/.c
     "caw": {
       "command": "/usr/local/bin/caw-watcher",
       "env": {
-        "CAW_WATCHER_HUB_URL": "https://caw.ravencloak.org",
-        "CAW_WATCHER_TOKEN": "<paste token from `hub mint-token`>"
+        "CAW_WATCHER_HUB_URL": "https://caw.ravencloak.org"
       }
     }
   }
@@ -46,25 +50,34 @@ Cursor uses the same MCP config schema as Claude Desktop. Edit (or create) `~/.c
 
 If you self-host, swap `CAW_WATCHER_HUB_URL` for your own Hub's public URL.
 
-## 3. Get a Hub token
+## 3. Log in
 
-- **Self-hosters:** mint a token against your own Hub:
+Restart Cursor so it picks up the new MCP server, then in a session invoke the
+`login` tool:
 
-  ```sh
-  docker compose exec hub /hub mint-token <installation_id> <org>
-  ```
+```
+login()
+```
 
-  `<installation_id>` is the GitHub App installation; `<org>` is the org or user that installed it.
+Your browser opens to `${CAW_WATCHER_HUB_URL}/auth/u/<session_id>`. Authorize
+the caw GitHub App, pick installation(s), and the hub delivers a token bound
+to your GitHub user + installation(s) over a one-shot loopback POST back to
+the watcher. It writes `~/.config/caw/credentials.json` (mode `0600`);
+subsequent tool calls find it automatically.
 
-- **Public Hub (`caw.ravencloak.org`):** install the [caw GitHub App](https://github.com/apps/caw-ravencloak) on the repo you want watched. GitHub redirects you to `https://caw.ravencloak.org/github/app/install/callback`, which shows your token once — copy it into the `CAW_WATCHER_TOKEN` env var above ([ADR-0010](../adr/0010-self-service-watcher-tokens.md)).
+For sandboxed environments (Codespaces, locked-down containers), pass
+`force_device: true` and the watcher uses GitHub-style device-code polling
+instead.
+
+See [`MCP-LOGIN.md`](./MCP-LOGIN.md) for the full login walkthrough, error
+recovery, and how to rotate a leaked token.
 
 ## 4. Smoke test
 
-1. Fully quit and restart Cursor so it re-reads the config and spawns `caw-watcher`.
-2. In a session, call the tool against a PR you know has at least one `check_suite` event:
+```
+subscribe_pr(owner: "<org>", repo: "<repo>", number: 1)
+```
 
-   ```
-   subscribe_pr(owner: "<org>", repo: "<repo>", number: 1)
-   ```
-
-3. Confirm a Summary comes back within ~30 seconds. If nothing arrives, double-check `CAW_WATCHER_TOKEN` and that the Hub sees webhooks for that PR.
+A Summary returns within ~30 seconds. After this first subscribe, any PR you
+raise from this machine auto-subscribes via the per-user control stream — no
+second `subscribe_pr` call needed.

@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,7 +85,18 @@ const harnessInstallID = int64(101)
 
 func harnessInstallIDStr() string { return fmt.Sprintf("%d", harnessInstallID) }
 
+// newAuthHarness builds a harness with Phase 5 default behavior
+// (allowLegacyTokens=false). Tests that exercise the operator escape hatch
+// call newAuthHarnessWithLegacy explicitly.
 func newAuthHarness(t *testing.T, nowFn func() time.Time) *authHarness {
+	return newAuthHarnessWithLegacy(t, nowFn, false)
+}
+
+// newAuthHarnessWithLegacy is newAuthHarness with the
+// CAW_ALLOW_LEGACY_TOKENS=1 escape hatch toggled. Phase 5 cutover tests
+// use it to verify both default-reject and escape-hatch behavior with the
+// same fixture wiring.
+func newAuthHarnessWithLegacy(t *testing.T, nowFn func() time.Time, allowLegacy bool) *authHarness {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "auth.db"))
 	if err != nil {
@@ -136,7 +148,7 @@ func newAuthHarness(t *testing.T, nowFn func() time.Time) *authHarness {
 
 	sseHub := sse.New()
 	engine := settle.New(st, sseHub, 30*time.Millisecond)
-	ts := httptest.NewServer(server.New(st, sseHub, sse.NewControlHub(), engine, []byte(secret), nil, nil, nil, nil, cache, nil))
+	ts := httptest.NewServer(server.New(st, sseHub, sse.NewControlHub(), engine, []byte(secret), nil, nil, nil, nil, cache, nil, allowLegacy))
 	t.Cleanup(ts.Close)
 
 	return &authHarness{
@@ -175,26 +187,54 @@ func drainAndClose(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
-// TestE2E_LegacyTokenBypassesAuthV2_DeprecationHeader: legacy tokens (rows
-// with NULL github_user_id, every v0.1.x prod token) continue to receive 200
-// on /sse/owner/repo/n with `Deprecation: legacy-token`. This is the headline
-// backward-compat guarantee of Phase 2.
-func TestE2E_LegacyTokenBypassesAuthV2_DeprecationHeader(t *testing.T) {
+// TestE2E_LegacyTokenRejectedAtCutover: the Phase 5 default. A legacy token
+// (NULL github_user_id, every v0.1.x prod token) hitting /sse/... is
+// rejected with 400 + JSON pointing the MCP at the login flow. Existing
+// SSE connections from legacy tokens drop on next dial.
+func TestE2E_LegacyTokenRejectedAtCutover(t *testing.T) {
 	h := newAuthHarness(t, nil)
 
 	resp := openSSE(t, h.ts.URL, h.legacyToken)
 	defer drainAndClose(resp)
 
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("legacy SSE status = %d, want 400 (Phase 5 cutover)", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Deprecation"); got != "" {
+		t.Errorf("Deprecation header = %q on reject path, want empty", got)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	for _, want := range []string{
+		`"user-bound token required"`,
+		`"/auth/start"`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body missing %q: %s", want, string(body))
+		}
+	}
+	if got := h.checker.callCount(); got != 0 {
+		t.Errorf("checker calls for rejected legacy = %d, want 0", got)
+	}
+}
+
+// TestE2E_LegacyTokenAllowedByOperatorEscapeHatch: the operator's
+// CAW_ALLOW_LEGACY_TOKENS=1 escape hatch restores the pre-cutover bypass
+// for one more release. Legacy token → 200 + `Deprecation: legacy-token`.
+// Same harness shape as the reject test; only the env-equivalent flag flips.
+func TestE2E_LegacyTokenAllowedByOperatorEscapeHatch(t *testing.T) {
+	h := newAuthHarnessWithLegacy(t, nil, true)
+
+	resp := openSSE(t, h.ts.URL, h.legacyToken)
+	defer drainAndClose(resp)
+
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("legacy SSE status = %d, want 200", resp.StatusCode)
+		t.Fatalf("legacy SSE status = %d under escape hatch, want 200", resp.StatusCode)
 	}
 	if got := resp.Header.Get("Deprecation"); got != "legacy-token" {
-		t.Errorf("Deprecation header = %q, want %q", got, "legacy-token")
+		t.Errorf("Deprecation = %q, want %q", got, "legacy-token")
 	}
-	// The legacy bypass MUST NOT consult the Checker — Phase 2's whole
-	// point is that legacy tokens cost zero GitHub calls.
 	if got := h.checker.callCount(); got != 0 {
-		t.Errorf("checker calls for legacy token = %d, want 0", got)
+		t.Errorf("checker calls under legacy bypass = %d, want 0", got)
 	}
 }
 

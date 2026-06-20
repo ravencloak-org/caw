@@ -26,11 +26,14 @@ import (
 // mintFn is optional: when non-nil it is passed to the Hub so that installation
 // "created" webhook events automatically mint a Hub token.
 // repoAccess is required: it backs the Auth v2 RequireRepoAccess middleware on
-// /sse/... and /leases/... — legacy (NULL github_user_id) tokens bypass with a
-// Deprecation header (Phase 2; enforcement starts in Phase 5). /pending only
-// uses the bearer auth (no per-repo path params; per-user filtering arrives
-// with Phase 4's /me/* surface). Tests that exercise only legacy tokens may
-// pass repoaccess.NewCache(nil, …) and never reach the cache's checker seam.
+// /sse/... and /leases/.... Phase 5 cutover: legacy (NULL github_user_id)
+// tokens are rejected with 400 by default; allowLegacyTokens=true (operator's
+// CAW_ALLOW_LEGACY_TOKENS=1 escape hatch) restores the pre-cutover bypass with
+// a `Deprecation: legacy-token` header for one more release of headroom.
+// /pending only uses the bearer auth (no per-repo path params; per-user
+// filtering arrives with Phase 4's /me/* surface). Tests that exercise only
+// legacy tokens may pass repoaccess.NewCache(nil, …) and never reach the
+// cache's checker seam.
 // meh is optional: when non-nil the Auth v2 Phase 4 /me/* routes are
 // registered (per-user token management — list, revoke, panic-recover).
 func New(
@@ -45,6 +48,7 @@ func New(
 	mintFn hub.MintFunc,
 	repoAccess *repoaccess.Cache,
 	meh *hub.MeHandler,
+	allowLegacyTokens bool,
 ) *gin.Engine {
 	r := gin.New()
 	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
@@ -94,7 +98,9 @@ func New(
 
 	authMW := auth.Required(st)
 	scopeMW := hub.RequireRepoScope(st)
-	accessMW := hub.RequireRepoAccess(repoAccess)
+	accessMW := hub.RequireRepoAccess(repoAccess, hub.RequireRepoAccessOptions{
+		AllowLegacyTokens: allowLegacyTokens,
+	})
 
 	// Auth v2 Phase 4 /me/* surface (issue #61). All four routes are
 	// auth-required only — they are per-user, not per-repo, so no

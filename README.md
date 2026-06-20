@@ -7,6 +7,12 @@
 
 **Install (Claude / Cursor / Codex CLI):** see [`docs/install/`](./docs/install/).
 
+**Logging in (Auth v2):** install the watcher per the harness guide above, then
+invoke the `login` MCP tool from inside your agent. The hub drives a browser
+OAuth handshake and delivers a user-bound token straight to the watcher — no
+token paste, no env-var rotation. Full flow + troubleshooting:
+[`docs/install/MCP-LOGIN.md`](./docs/install/MCP-LOGIN.md).
+
 When an AI agent raises a pull request, getting it green (CI, review comments, mergeability) usually means a human babysitting the PR and re-prompting the agent every time something fails. Caw inverts that: GitHub webhooks are compiled into a single summary and **pushed** to the agent over a held-open SSE connection, so the agent that raised the PR keeps working it on its own. If that agent is gone, the summary waits as a *pending item* for the next agent to pick up.
 
 Caw is **harness-agnostic** (any MCP client — Claude, Gemini, OpenAI, Cursor) and **reviewer-agnostic** (any commenting bot or human — CodeRabbit, Sonar, Snyk, …).
@@ -97,9 +103,19 @@ Then:
 
 1. **Create the GitHub App** — hit `GET /github/app/manifest` with the bootstrap token in the `Authorization: Bearer` header to run the App Manifest flow; the callback mints and stores the App credentials (App ID, private key, OAuth client) in the Hub's DB.
 2. **Install the App** on the repos you want watched.
-3. **Get a Watcher token** — when a user installs the App, GitHub redirects them back to `${CAW_BASE_URL}/github/app/install/callback`, which renders the token once for copy-paste into a harness ([ADR-0010](./docs/adr/0010-self-service-watcher-tokens.md)). Operators may still mint tokens server-side via `hub mint-token <installation_id> [org]` for automation or recovery.
-4. **Point a Watcher** (the MCP server in your harness) at the Hub URL with that token and `subscribe_pr(owner, repo, number)`.
-  - See [`docs/install/`](./docs/install/) for harness-specific configs (Claude Desktop, Cursor, Codex CLI).
+3. **Log in** — install caw-watcher in your harness (see
+   [`docs/install/`](./docs/install/) for harness-specific configs: Claude
+   Desktop, Cursor, Codex CLI) and invoke the `login` MCP tool from inside
+   your agent. Your browser opens to a hub-driven OAuth handshake; the
+   resulting user-bound token lands in `~/.config/caw/credentials.json`
+   automatically. See [`docs/install/MCP-LOGIN.md`](./docs/install/MCP-LOGIN.md)
+   for the full flow, troubleshooting, and rotation. Operators can still
+   mint server-side tokens via `hub mint-token <installation_id> [org]` for
+   automation, and `hub migrate-tokens` revokes any pre-Auth-v2 legacy rows
+   at cutover.
+4. **Subscribe** — call `subscribe_pr(owner, repo, number)` once for an
+   existing PR; any new PR you raise after login auto-subscribes via the
+   per-user control stream (Phase 3.5).
 
 **SaaS:** install the hosted App, install the Watcher, subscribe. (Pricing TBD.)
 

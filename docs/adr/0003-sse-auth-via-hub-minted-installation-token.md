@@ -1,7 +1,8 @@
 # 0003 — SSE auth via a Hub-minted per-installation token
 
-**Status:** Accepted
+**Status:** Accepted (per-user-isolation clause superseded by [ADR-0011](./0011-user-bound-installation-tokens-and-mcp-login.md))
 **Date:** 2026-06-07
+**Superseded-By:** [ADR-0011](./0011-user-bound-installation-tokens-and-mcp-login.md) (per-user-isolation clause only — all other clauses stand)
 
 ## Decision
 

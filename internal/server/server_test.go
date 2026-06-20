@@ -72,11 +72,14 @@ func newTestServerOpts(t *testing.T, grace time.Duration, optsFn func(*store.Sto
 		opts = optsFn(st)
 	}
 	engine := settle.New(st, sseHub, grace, opts...)
-	// Existing tests use legacy (NULL github_user_id) tokens — they bypass
-	// the Auth v2 RequireRepoAccess middleware before ever touching the
-	// cache's Checker seam, so a checker-less cache is sufficient here.
+	// Existing tests use legacy (NULL github_user_id) tokens — Phase 5
+	// rejects them by default, but these tests pre-date the per-user model
+	// and target the webhook→SSE plumbing rather than the cutover. Enable
+	// the operator escape hatch (CAW_ALLOW_LEGACY_TOKENS=1 equivalent) so
+	// the legacy token still bypasses RequireRepoAccess; the cutover
+	// behavior is exercised in repo_access_e2e_test.go.
 	cache := repoaccess.NewCache(nil, repoaccess.Options{})
-	ts := httptest.NewServer(server.New(st, sseHub, sse.NewControlHub(), engine, []byte(secret), nil, nil, nil, nil, cache, nil))
+	ts := httptest.NewServer(server.New(st, sseHub, sse.NewControlHub(), engine, []byte(secret), nil, nil, nil, nil, cache, nil, true))
 	t.Cleanup(ts.Close)
 	return ts, raw, st
 }

@@ -809,3 +809,128 @@ func TestRevokeTokensForInstallation(t *testing.T) {
 		t.Errorf("empty installation: n=%d err=%v, want 0/nil", n, err)
 	}
 }
+
+// TestListLegacyTokens proves the auth-v2 Phase 5 cutover lookup: returns
+// every still-active row with NULL github_user_id (revoked, expired, and
+// user-bound rows are filtered out). The `hub migrate-tokens` subcommand
+// iterates this list to revoke each legacy row at cutover; idempotency at
+// the operator-side comes from this filter (a revoked row drops out of the
+// next call's result set).
+func TestListLegacyTokens(t *testing.T) {
+	s := newTestStore(t)
+	now := int64(1_700_000_100)
+	live := int64(1_700_001_000)
+	past := int64(1_700_000_050)
+	revokedAt := int64(1_700_000_080)
+	uid := int64(42)
+
+	// Two active legacy rows (one with no expiry, one with a future expiry)
+	// — both must appear in the result, ordered by created_at ASC for stable
+	// operator output.
+	if err := s.InsertTokenRow(Token{
+		ID:             "A0000000000000000000000001",
+		Hash:           "legacy-noexp",
+		InstallationID: "inst-1",
+		Org:            "org-1",
+		DeviceLabel:    "legacy",
+		CreatedAt:      1_700_000_000,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow legacy-noexp: %v", err)
+	}
+	if err := s.InsertTokenRow(Token{
+		ID:             "A0000000000000000000000002",
+		Hash:           "legacy-future-exp",
+		InstallationID: "inst-2",
+		Org:            "org-2",
+		DeviceLabel:    "legacy",
+		CreatedAt:      1_700_000_010,
+		ExpiresAt:      &live,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow legacy-future-exp: %v", err)
+	}
+	// Revoked legacy row — filtered.
+	if err := s.InsertTokenRow(Token{
+		ID:             "B0000000000000000000000001",
+		Hash:           "legacy-revoked",
+		InstallationID: "inst-1",
+		Org:            "org-1",
+		DeviceLabel:    "legacy",
+		CreatedAt:      1_700_000_005,
+		RevokedAt:      &revokedAt,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow legacy-revoked: %v", err)
+	}
+	// Expired legacy row — filtered.
+	if err := s.InsertTokenRow(Token{
+		ID:             "C0000000000000000000000001",
+		Hash:           "legacy-expired",
+		InstallationID: "inst-1",
+		Org:            "org-1",
+		DeviceLabel:    "legacy",
+		CreatedAt:      1_700_000_005,
+		ExpiresAt:      &past,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow legacy-expired: %v", err)
+	}
+	// User-bound row — filtered (not legacy).
+	if err := s.InsertTokenRow(Token{
+		ID:             "D0000000000000000000000001",
+		Hash:           "user-bound",
+		InstallationID: "inst-1",
+		Org:            "org-1",
+		GitHubUserID:   &uid,
+		DeviceLabel:    "device-1",
+		CreatedAt:      1_700_000_020,
+	}); err != nil {
+		t.Fatalf("InsertTokenRow user-bound: %v", err)
+	}
+
+	rows, err := s.ListLegacyTokens(now)
+	if err != nil {
+		t.Fatalf("ListLegacyTokens: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 active legacy", len(rows))
+	}
+	// Ordering: created_at ASC.
+	if rows[0].Hash != "legacy-noexp" || rows[1].Hash != "legacy-future-exp" {
+		t.Errorf("ordering = [%s, %s], want [legacy-noexp, legacy-future-exp]",
+			rows[0].Hash, rows[1].Hash)
+	}
+	for _, r := range rows {
+		if r.GitHubUserID != nil {
+			t.Errorf("row %q has GitHubUserID=%v, want nil", r.Hash, r.GitHubUserID)
+		}
+		if r.RevokedAt != nil {
+			t.Errorf("row %q has RevokedAt=%v, want nil", r.Hash, r.RevokedAt)
+		}
+	}
+
+	// Idempotency simulation: revoke one row and re-list. The revoked row
+	// drops out; the operator's second `migrate-tokens` invocation
+	// processes only what is still active.
+	if err := s.RevokeToken("A0000000000000000000000001", now); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+	rows, err = s.ListLegacyTokens(now)
+	if err != nil {
+		t.Fatalf("ListLegacyTokens after revoke: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Hash != "legacy-future-exp" {
+		t.Fatalf("post-revoke rows = %+v, want only legacy-future-exp", rows)
+	}
+
+	// Steady-state post-migration: revoke the remaining row and verify the
+	// list returns an empty slice (not a nil/error pair the operator
+	// command would have to special-case).
+	if err := s.RevokeToken("A0000000000000000000000002", now); err != nil {
+		t.Fatalf("RevokeToken steady: %v", err)
+	}
+	rows, err = s.ListLegacyTokens(now)
+	if err != nil {
+		t.Fatalf("ListLegacyTokens steady: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("steady rows = %d, want 0", len(rows))
+	}
+}
