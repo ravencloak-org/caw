@@ -18,7 +18,7 @@ jobs:
     name: SQLFluff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -36,7 +36,7 @@ jobs:
     env:
       DOLT_VERSION: "2.1.4"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history so dolt log works inside the db/ subdirectory
           fetch-depth: 0
