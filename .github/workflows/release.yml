@@ -25,7 +25,7 @@ jobs:
     name: Build and push image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Don't leave a writable token in the local git config for later
           # steps; build/push uses its own scoped GHCR token, and webhook
@@ -90,7 +90,7 @@ jobs:
           - { goos: linux,   goarch: amd64, ext: ""     }
           - { goos: windows, goarch: amd64, ext: ".exe" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -139,7 +139,7 @@ jobs:
     needs: [build-push, build-watcher]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # gh needs full history to diff against the previous tag
 
