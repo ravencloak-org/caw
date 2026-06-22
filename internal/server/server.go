@@ -16,6 +16,23 @@ import (
 	"github.com/ravencloak-org/caw/internal/store"
 )
 
+// serverOptions collects the optional knobs applied to the Hub built by New.
+type serverOptions struct {
+	// leaseTTLSeconds, when > 0, overrides the Hub's lease TTL; 0 keeps the
+	// Hub's compiled-in default.
+	leaseTTLSeconds int64
+}
+
+// Option configures the server built by New. Options are variadic and optional,
+// so existing call sites compile unchanged.
+type Option func(*serverOptions)
+
+// WithLeaseTTL overrides the Hub lease TTL (in seconds) for acquire/renew. A
+// non-positive value is ignored, leaving the Hub's default in place.
+func WithLeaseTTL(seconds int64) Option {
+	return func(o *serverOptions) { o.leaseTTLSeconds = seconds }
+}
+
 // New builds the Gin engine with all routes wired. The SSE and pending routes
 // are gated by installation-token auth (ADR-0003); the SSE route is registered
 // without buffering middleware so the held connection streams (ADR-0001).
@@ -49,11 +66,20 @@ func New(
 	repoAccess *repoaccess.Cache,
 	meh *hub.MeHandler,
 	allowLegacyTokens bool,
+	opts ...Option,
 ) *gin.Engine {
+	o := serverOptions{leaseTTLSeconds: 0} // 0 → Hub keeps its default lease TTL
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	r := gin.New()
 	r.Use(otelgin.Middleware("caw-hub"), gin.Logger(), gin.Recovery())
 
 	h := hub.New(st, secret, engine)
+	if o.leaseTTLSeconds > 0 {
+		h.WithLeaseTTL(o.leaseTTLSeconds)
+	}
 	if mintFn != nil {
 		h.WithMintFunc(mintFn)
 	}

@@ -24,24 +24,46 @@ func (noopRenewer) ReleaseRebaseLease(_ context.Context, _, _ string, _ int, _ s
 	return nil
 }
 
-// heartbeatInterval is how often the session sends a heartbeat while
-// rebasing. Must be comfortably shorter than the 90 s Hub lease TTL.
+// heartbeatInterval is the default cadence at which the session sends a
+// heartbeat while rebasing. Must be comfortably shorter than the Hub lease TTL.
+// It is the fallback when no WithHeartbeatInterval option is supplied, so the
+// behaviour is unchanged unless an operator tunes CAW_REBASE_HEARTBEAT.
 const heartbeatInterval = 30 * time.Second
 
 // Session performs the normal-path rebase for an agent-owned PR (ADR-0002).
 // It uses the already-acquired lease identified by cfg.Holder, sends periodic
 // heartbeats to the Hub, runs git fetch/rebase/force-push, then releases the lease.
 type Session struct {
-	runner  GitRunner
-	renewer LeaseRenewer
+	runner    GitRunner
+	renewer   LeaseRenewer
+	heartbeat time.Duration
+}
+
+// SessionOption configures a Session.
+type SessionOption func(*Session)
+
+// WithHeartbeatInterval overrides the lease-heartbeat cadence. A non-positive
+// value is ignored, leaving the default heartbeatInterval in place.
+func WithHeartbeatInterval(d time.Duration) SessionOption {
+	return func(s *Session) {
+		if d > 0 {
+			s.heartbeat = d
+		}
+	}
 }
 
 // NewSession constructs a Session with the given GitRunner and LeaseRenewer.
-func NewSession(runner GitRunner, renewer LeaseRenewer) *Session {
+// The heartbeat cadence defaults to heartbeatInterval; override it with
+// WithHeartbeatInterval.
+func NewSession(runner GitRunner, renewer LeaseRenewer, opts ...SessionOption) *Session {
 	if renewer == nil {
 		renewer = noopRenewer{}
 	}
-	return &Session{runner: runner, renewer: renewer}
+	s := &Session{runner: runner, renewer: renewer, heartbeat: heartbeatInterval}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Run performs the full rebase sequence:
@@ -58,7 +80,7 @@ func (s *Session) Run(ctx context.Context, cfg Config) error {
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
 	go func() {
-		ticker := time.NewTicker(heartbeatInterval)
+		ticker := time.NewTicker(s.heartbeat)
 		defer ticker.Stop()
 		for {
 			select {

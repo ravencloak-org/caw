@@ -59,18 +59,30 @@ type ControlPublisher interface {
 
 // Hub holds the dependencies for handling webhooks and serving pending items.
 type Hub struct {
-	store   *store.Store
-	secret  []byte
-	settler *settle.Engine   // may be nil (e.g. in unit tests of pure ingest)
-	mintFn  MintFunc         // nil → no auto-minting
-	flusher CacheFlusher     // nil → no Auth v2 cache invalidation (legacy / tests)
-	control ControlPublisher // nil → no Phase 3.5 control-stream fan-out
-	nowFn   func() int64     // injectable clock for the active-token filter (tests)
+	store    *store.Store
+	secret   []byte
+	settler  *settle.Engine   // may be nil (e.g. in unit tests of pure ingest)
+	mintFn   MintFunc         // nil → no auto-minting
+	flusher  CacheFlusher     // nil → no Auth v2 cache invalidation (legacy / tests)
+	control  ControlPublisher // nil → no Phase 3.5 control-stream fan-out
+	nowFn    func() int64     // injectable clock for the active-token filter (tests)
+	leaseTTL int64            // seconds granted per lease acquire/renew; defaults to leaseTTL const
 }
 
 // New constructs a Hub. settler may be nil, in which case settles are not scheduled.
+// The lease TTL defaults to the leaseTTL constant; override it with WithLeaseTTL.
 func New(st *store.Store, secret []byte, settler *settle.Engine) *Hub {
-	return &Hub{store: st, secret: secret, settler: settler}
+	return &Hub{store: st, secret: secret, settler: settler, leaseTTL: leaseTTL}
+}
+
+// WithLeaseTTL overrides the per-acquire/renew lease TTL (in seconds). A
+// non-positive value is ignored, leaving the default leaseTTL in place. Returns
+// Hub for chaining.
+func (h *Hub) WithLeaseTTL(seconds int64) *Hub {
+	if seconds > 0 {
+		h.leaseTTL = seconds
+	}
+	return h
 }
 
 // WithMintFunc sets the function called to mint a Hub token when an

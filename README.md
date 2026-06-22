@@ -99,6 +99,12 @@ Required `.env` values:
 - `CAW_BOOTSTRAP_TOKEN` — one-time operator secret that gates the manifest routes (`openssl rand -hex 32`).
 - `ZO_ROOT_USER_EMAIL` / `ZO_ROOT_USER_PASSWORD` and the matching `OTEL_EXPORTER_OTLP_HEADERS` — OpenObserve root login plus its OTLP Basic-auth header (the compose file already wires `OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5081`). Unset the endpoint to disable telemetry export entirely.
 
+Optional tuning knobs (each defaults to today's hardcoded value, so leaving it unset is a no-op; a malformed or non-positive value is logged and falls back to the default rather than crashing the Hub):
+
+- `CAW_SETTLE_GRACE` — settle grace window after the latest trigger, as a Go duration (e.g. `30s`, `2m`). Default `30s`.
+- `CAW_REBASE_LEASE_TTL` — rebase-lease TTL in whole seconds, shared by the Hub lease handler and the orphan rebase handler. Default `90`.
+- `CAW_REBASE_HEARTBEAT` — how often a rebase session/orphan handler renews its lease, as a Go duration. Keep it comfortably shorter than `CAW_REBASE_LEASE_TTL`. Default `30s`.
+
 Then:
 
 1. **Create the GitHub App** — hit `GET /github/app/manifest` with the bootstrap token in the `Authorization: Bearer` header to run the App Manifest flow; the callback mints and stores the App credentials (App ID, private key, OAuth client) in the Hub's DB.

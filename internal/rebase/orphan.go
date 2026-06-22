@@ -23,8 +23,10 @@ type LeaseStore interface {
 	ReleaseLease(org, repo string, prNumber int, holder string) error
 }
 
-// orphanLeaseTTL is the store-level lease TTL in seconds used by the Hub orphan
-// handler — mirrors hub.leaseTTL (90 s).
+// orphanLeaseTTL is the default store-level lease TTL in seconds used by the Hub
+// orphan handler — mirrors hub.leaseTTL (90 s). It is the fallback when no
+// WithLeaseTTL option is supplied, so behaviour is unchanged unless an operator
+// tunes CAW_REBASE_LEASE_TTL.
 const orphanLeaseTTL = int64(90)
 
 // OrphanHandler implements settle.OrphanRebaseHandler. When a PR is orphaned
@@ -34,11 +36,13 @@ const orphanLeaseTTL = int64(90)
 //  3. Calls EnableAutoMerge on the GitHub client.
 //  4. Releases the lease.
 type OrphanHandler struct {
-	holderID string // e.g. the Hub's installation ID
-	store    LeaseStore
-	runner   GitRunner
-	merger   AutoMerger
-	branchFn func(owner, repo string, number int) Config // builds git config for the PR
+	holderID  string // e.g. the Hub's installation ID
+	store     LeaseStore
+	runner    GitRunner
+	merger    AutoMerger
+	branchFn  func(owner, repo string, number int) Config // builds git config for the PR
+	leaseTTL  int64                                       // store lease TTL, in seconds
+	heartbeat time.Duration                               // lease-renewal cadence
 }
 
 // OrphanHandlerOption configures an OrphanHandler.
@@ -50,14 +54,40 @@ func WithBranchResolver(fn func(owner, repo string, number int) Config) OrphanHa
 	return func(h *OrphanHandler) { h.branchFn = fn }
 }
 
+// WithLeaseTTL overrides the store-level lease TTL (in seconds) acquired and
+// renewed during an orphan rebase. A non-positive value is ignored, leaving the
+// default orphanLeaseTTL in place.
+func WithLeaseTTL(seconds int64) OrphanHandlerOption {
+	return func(h *OrphanHandler) {
+		if seconds > 0 {
+			h.leaseTTL = seconds
+		}
+	}
+}
+
+// WithOrphanHeartbeatInterval overrides the lease-renewal cadence during an
+// orphan rebase. A non-positive value is ignored, leaving the default
+// heartbeatInterval in place.
+func WithOrphanHeartbeatInterval(d time.Duration) OrphanHandlerOption {
+	return func(h *OrphanHandler) {
+		if d > 0 {
+			h.heartbeat = d
+		}
+	}
+}
+
 // NewOrphanHandler builds an OrphanHandler. holderID is the lease holder
 // identity string (e.g. the Hub installation ID or a stable unique string).
+// The lease TTL defaults to orphanLeaseTTL and the heartbeat cadence to
+// heartbeatInterval; override them with WithLeaseTTL / WithOrphanHeartbeatInterval.
 func NewOrphanHandler(holderID string, st LeaseStore, runner GitRunner, merger AutoMerger, opts ...OrphanHandlerOption) *OrphanHandler {
 	h := &OrphanHandler{
-		holderID: holderID,
-		store:    st,
-		runner:   runner,
-		merger:   merger,
+		holderID:  holderID,
+		store:     st,
+		runner:    runner,
+		merger:    merger,
+		leaseTTL:  orphanLeaseTTL,
+		heartbeat: heartbeatInterval,
 	}
 	for _, o := range opts {
 		o(h)
@@ -83,7 +113,7 @@ func defaultBranchConfig(owner, repo string, number int) Config {
 // Hub-granted lease from the store, performs the rebase with periodic heartbeats,
 // enables GitHub auto-merge, and releases the lease.
 func (h *OrphanHandler) TriggerOrphanRebase(ctx context.Context, owner, repo string, number int, sha string) error {
-	res, err := h.store.AcquireLease(owner, repo, number, h.holderID, orphanLeaseTTL)
+	res, err := h.store.AcquireLease(owner, repo, number, h.holderID, h.leaseTTL)
 	if err != nil {
 		return fmt.Errorf("orphan rebase %s/%s#%d: acquire lease: %w", owner, repo, number, err)
 	}
@@ -101,14 +131,14 @@ func (h *OrphanHandler) TriggerOrphanRebase(ctx context.Context, owner, repo str
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
 	go func() {
-		ticker := time.NewTicker(heartbeatInterval)
+		ticker := time.NewTicker(h.heartbeat)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-hbCtx.Done():
 				return
 			case <-ticker.C:
-				if _, err := h.store.RenewLease(owner, repo, number, h.holderID, orphanLeaseTTL); err != nil {
+				if _, err := h.store.RenewLease(owner, repo, number, h.holderID, h.leaseTTL); err != nil {
 					log.Printf("orphan rebase %s/%s#%d: heartbeat: %v", owner, repo, number, err)
 				}
 			}
