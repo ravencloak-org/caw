@@ -11,11 +11,13 @@ import (
 	"github.com/ravencloak-org/caw/internal/auth"
 )
 
-// leaseTTL is the TTL (in seconds) granted per successful lease acquisition or
-// heartbeat renewal (ADR-0005). 90 s is chosen to be slightly longer than a
-// typical git rebase + force-push round-trip while still expiring quickly
-// enough that a crashed worker unblocks the next holder within two minutes.
-// Tunable via configuration in a future slice.
+// leaseTTL is the default TTL (in seconds) granted per successful lease
+// acquisition or heartbeat renewal (ADR-0005). 90 s is chosen to be slightly
+// longer than a typical git rebase + force-push round-trip while still expiring
+// quickly enough that a crashed worker unblocks the next holder within two
+// minutes. It is the fallback when the Hub is built without WithLeaseTTL, so the
+// behavior is unchanged unless an operator tunes CAW_REBASE_LEASE_TTL; the
+// per-Hub runtime value lives in Hub.leaseTTL.
 const leaseTTL = int64(90)
 
 // HandleAcquireLease serves POST /leases/:owner/:repo/:number.
@@ -52,7 +54,7 @@ func (h *Hub) HandleAcquireLease(c *gin.Context) {
 		return
 	}
 
-	res, err := h.store.AcquireLease(owner, repo, num, holder, leaseTTL)
+	res, err := h.store.AcquireLease(owner, repo, num, holder, h.leaseTTL)
 	if err != nil {
 		log.Printf("acquire lease %s/%s#%d: %v", owner, repo, num, err)
 		c.String(http.StatusInternalServerError, "lease")
@@ -65,7 +67,7 @@ func (h *Hub) HandleAcquireLease(c *gin.Context) {
 	// treat the expired holder as no-holder and retry the acquire once. An expired
 	// lease must never block a fresh holder at the API boundary.
 	if !res.Granted && leaseExpired(res.Lease.ExpiresAt) {
-		res, err = h.store.AcquireLease(owner, repo, num, holder, leaseTTL)
+		res, err = h.store.AcquireLease(owner, repo, num, holder, h.leaseTTL)
 		if err != nil {
 			log.Printf("re-acquire expired lease %s/%s#%d: %v", owner, repo, num, err)
 			c.String(http.StatusInternalServerError, "lease")
@@ -132,7 +134,7 @@ func (h *Hub) HandleRenewLease(c *gin.Context) {
 		return
 	}
 
-	updated, err := h.store.RenewLease(owner, repo, num, holder, leaseTTL)
+	updated, err := h.store.RenewLease(owner, repo, num, holder, h.leaseTTL)
 	if err != nil {
 		log.Printf("renew lease %s/%s#%d holder=%s: %v", owner, repo, num, holder, err)
 		c.JSON(http.StatusConflict, gin.H{"error": "not holder or lease expired"})

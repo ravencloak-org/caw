@@ -108,10 +108,13 @@ func main() {
 	if ghClient != nil {
 		autoMerger = ghClient
 	}
-	orphanHandler := rebase.NewOrphanHandler(holderID, st, orphanRunner, autoMerger)
+	orphanHandler := rebase.NewOrphanHandler(holderID, st, orphanRunner, autoMerger,
+		rebase.WithLeaseTTL(cfg.RebaseLeaseTTLSeconds),
+		rebase.WithOrphanHeartbeatInterval(cfg.RebaseHeartbeat),
+	)
 	opts = append(opts, settle.WithOrphanRebaseHandler(orphanHandler))
 
-	engine := settle.New(st, sseHub, settle.DefaultGrace, opts...)
+	engine := settle.New(st, sseHub, cfg.SettleGrace, opts...)
 
 	// Build the GitHub App manifest handler. It is optional and gated: it
 	// requires both CAW_BASE_URL and the operator bootstrap secret
@@ -231,7 +234,8 @@ func main() {
 	if allowLegacyTokens {
 		log.Println("warning: CAW_ALLOW_LEGACY_TOKENS=1 — legacy tokens bypass repo-access checks; remove this for the next release after all watchers re-login")
 	}
-	r := server.New(st, sseHub, controlHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache, meh, allowLegacyTokens)
+	r := server.New(st, sseHub, controlHub, engine, []byte(cfg.GitHubWebhookSecret), mh, ich, ash, mintFn, repoCache, meh, allowLegacyTokens,
+		server.WithLeaseTTL(cfg.RebaseLeaseTTLSeconds))
 
 	// Auth v2 Phase 3: 15-min purger sweeps expired auth_sessions rows. The
 	// rows are also rejected on read by the handlers' own expiry checks; the

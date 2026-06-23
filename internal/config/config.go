@@ -1,7 +1,24 @@
 // Package config loads Hub configuration from the environment.
 package config
 
-import "os"
+import (
+	"log"
+	"os"
+	"strconv"
+	"time"
+)
+
+// Defaults for the operational tuning knobs (CONTEXT.md "tuning knobs in
+// flight": grace-window duration, rebase-lease TTL/heartbeat). These mirror the
+// package-level constants at the call sites (settle.DefaultGrace, hub.leaseTTL,
+// rebase.heartbeatInterval) and are the source of truth for the
+// unset/invalid-env fallback — so an unset or malformed env var reproduces
+// today's exact behavior with zero drift.
+const (
+	defaultSettleGrace           = 30 * time.Second
+	defaultRebaseLeaseTTLSeconds = int64(90)
+	defaultRebaseHeartbeat       = 30 * time.Second
+)
 
 // Config holds the Hub's runtime configuration.
 type Config struct {
@@ -51,6 +68,21 @@ type Config struct {
 	// when empty, the hub falls back to store.AnyAppSlug (populated from the
 	// installation.created webhook). Operator-side env var: CAW_APP_SLUG.
 	AppSlug string
+
+	// Operational tuning knobs (CONTEXT.md). Each defaults to the current
+	// hardcoded value, so leaving the env var unset is a no-op.
+
+	// SettleGrace is the settle grace window after the latest trigger
+	// (CAW_SETTLE_GRACE, a Go duration like "30s"). Default 30s.
+	SettleGrace time.Duration
+	// RebaseLeaseTTLSeconds is the store-level rebase-lease TTL in seconds,
+	// shared by the Hub lease handler and the orphan rebase handler
+	// (CAW_REBASE_LEASE_TTL, an integer count of seconds). Default 90.
+	RebaseLeaseTTLSeconds int64
+	// RebaseHeartbeat is how often a rebase session/orphan handler renews its
+	// lease (CAW_REBASE_HEARTBEAT, a Go duration like "30s"). Must stay
+	// comfortably shorter than RebaseLeaseTTLSeconds. Default 30s.
+	RebaseHeartbeat time.Duration
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -71,6 +103,10 @@ func Load() Config {
 		BootstrapToken:      os.Getenv("CAW_BOOTSTRAP_TOKEN"),
 		AllowRebootstrap:    getenvBool("ALLOW_REBOOTSTRAP"),
 		AppSlug:             os.Getenv("CAW_APP_SLUG"),
+
+		SettleGrace:           getenvDuration("CAW_SETTLE_GRACE", defaultSettleGrace),
+		RebaseLeaseTTLSeconds: getenvInt64("CAW_REBASE_LEASE_TTL", defaultRebaseLeaseTTLSeconds),
+		RebaseHeartbeat:       getenvDuration("CAW_REBASE_HEARTBEAT", defaultRebaseHeartbeat),
 	}
 }
 
@@ -90,4 +126,45 @@ func getenvBool(key string) bool {
 	default:
 		return false
 	}
+}
+
+// getenvDuration parses key as a Go duration (e.g. "30s", "2m"). An unset,
+// empty, unparseable, or non-positive value falls back to def — and a malformed
+// value is logged rather than crashing the Hub, since a bad tuning knob must not
+// take the process down on boot.
+func getenvDuration(key string, def time.Duration) time.Duration {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("config: %s=%q is not a valid duration (%v); using default %s", key, raw, err, def)
+		return def
+	}
+	if d <= 0 {
+		log.Printf("config: %s=%q must be positive; using default %s", key, raw, def)
+		return def
+	}
+	return d
+}
+
+// getenvInt64 parses key as a base-10 int64. An unset, empty, unparseable, or
+// non-positive value falls back to def, logging malformed input rather than
+// crashing the Hub.
+func getenvInt64(key string, def int64) int64 {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		log.Printf("config: %s=%q is not a valid integer (%v); using default %d", key, raw, err, def)
+		return def
+	}
+	if n <= 0 {
+		log.Printf("config: %s=%q must be positive; using default %d", key, raw, def)
+		return def
+	}
+	return n
 }
