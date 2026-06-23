@@ -16,7 +16,7 @@ import (
 // longer than a typical git rebase + force-push round-trip while still expiring
 // quickly enough that a crashed worker unblocks the next holder within two
 // minutes. It is the fallback when the Hub is built without WithLeaseTTL, so the
-// behaviour is unchanged unless an operator tunes CAW_REBASE_LEASE_TTL; the
+// behavior is unchanged unless an operator tunes CAW_REBASE_LEASE_TTL; the
 // per-Hub runtime value lives in Hub.leaseTTL.
 const leaseTTL = int64(90)
 

@@ -27,7 +27,7 @@ func (noopRenewer) ReleaseRebaseLease(_ context.Context, _, _ string, _ int, _ s
 // heartbeatInterval is the default cadence at which the session sends a
 // heartbeat while rebasing. Must be comfortably shorter than the Hub lease TTL.
 // It is the fallback when no WithHeartbeatInterval option is supplied, so the
-// behaviour is unchanged unless an operator tunes CAW_REBASE_HEARTBEAT.
+// behavior is unchanged unless an operator tunes CAW_REBASE_HEARTBEAT.
 const heartbeatInterval = 30 * time.Second
 
 // Session performs the normal-path rebase for an agent-owned PR (ADR-0002).

@@ -25,7 +25,7 @@ type LeaseStore interface {
 
 // orphanLeaseTTL is the default store-level lease TTL in seconds used by the Hub
 // orphan handler — mirrors hub.leaseTTL (90 s). It is the fallback when no
-// WithLeaseTTL option is supplied, so behaviour is unchanged unless an operator
+// WithLeaseTTL option is supplied, so behavior is unchanged unless an operator
 // tunes CAW_REBASE_LEASE_TTL.
 const orphanLeaseTTL = int64(90)
 

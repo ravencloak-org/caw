@@ -13,7 +13,7 @@ import (
 // package-level constants at the call sites (settle.DefaultGrace, hub.leaseTTL,
 // rebase.heartbeatInterval) and are the source of truth for the
 // unset/invalid-env fallback — so an unset or malformed env var reproduces
-// today's exact behaviour with zero drift.
+// today's exact behavior with zero drift.
 const (
 	defaultSettleGrace           = 30 * time.Second
 	defaultRebaseLeaseTTLSeconds = int64(90)
