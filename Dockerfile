@@ -2,7 +2,7 @@
 
 # ---- Builder ---------------------------------------------------------------
 # Pure-Go build (modernc.org/sqlite) => CGO_ENABLED=0, no C toolchain needed.
-FROM golang:1.26 AS builder
+FROM golang:1.27 AS builder
 
 WORKDIR /src
 
